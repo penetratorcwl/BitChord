@@ -1399,6 +1399,8 @@ object InnertubeParser {
     private val HEADER_RENDERERS = listOf(
         "musicResponsiveHeaderRenderer",
         "musicDetailHeaderRenderer",
+        "musicImmersiveHeaderRenderer",
+        "musicVisualHeaderRenderer",
     )
     /** Header lines that name the artist, in either header shape. */
     private val HEADER_CREDIT_LINES = listOf("straplineTextOne", "subtitle")
