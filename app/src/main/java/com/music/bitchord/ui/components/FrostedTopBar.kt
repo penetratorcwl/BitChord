@@ -324,9 +324,9 @@ fun FrostedTopBar(
                     // installed next to the prod build; this badge is the
                     // in-app equivalent, so the two are never mixed up at a
                     // glance once both are running.
-                    if (BuildConfig.FLAVOR == "dev") {
+                    flavorBadge?.let { badge ->
                         Text(
-                            text = "Dev",
+                            text = badge,
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(start = 6.dp),
@@ -392,9 +392,9 @@ private fun FloatingAppMark(
                 modifier = Modifier.size(width = 24.dp, height = 16.dp),
             )
         }
-        if (BuildConfig.FLAVOR == "dev") {
+        flavorBadge?.let { badge ->
             Text(
-                text = "Dev",
+                text = badge,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(start = 6.dp),
@@ -674,3 +674,19 @@ private val PUCK_OVERSHOOT = 20.dp
  * glyph does, and at 24 it sat heavier in the bar than the wordmark opposite it.
  */
 private val AVATAR_SIZE = 28.dp
+
+/**
+ * The tag naming the parallel install this is, or null on the shipped build.
+ *
+ * Each flavor that has its own `applicationId` gets a word here, because a
+ * device can carry several of them at once and the badge is the only thing on
+ * screen that says which one is talking. `prod` deliberately returns null: it is
+ * the one that needs no marking, and it is the one where adding one would be
+ * noise.
+ */
+private val flavorBadge: String?
+    get() = when (BuildConfig.FLAVOR) {
+        "dev" -> "Dev"
+        "alt" -> "Alt"
+        else -> null
+    }

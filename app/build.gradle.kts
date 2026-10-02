@@ -125,6 +125,20 @@ android {
             dimension = "env"
             // Matches defaultConfig — this is the package already shipped/installed.
         }
+        create("alt") {
+            dimension = "env"
+            // A third copy, for when both of the others are already installed
+            // and signed with a key that no longer matches the one a fresh
+            // build carries. Android keys an installed package by
+            // applicationId *and* signing certificate, so a new applicationId is
+            // the only thing that makes a third install possible at all —
+            // changing the version code or the build type would not.
+            //
+            // Debug-signed like dev, so nothing here depends on a keystore that
+            // a fork does not have.
+            applicationId = "com.alt.bitchord"
+            resValue("string", "app_name", "BitChord Alt")
+        }
     }
 
     signingConfigs {
