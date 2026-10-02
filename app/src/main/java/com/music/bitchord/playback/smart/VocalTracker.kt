@@ -27,7 +27,9 @@ import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.util.Log
 import com.music.bitchord.data.settings.AppSettings
-import java.io.File
+import com.music.bitchord.playback.stems.SeparationSessionFactory
+import com.music.bitchord.playback.stems.StemsAccelerator
+import com.music.bitchord.playback.stems.StemsBackendProbe
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -96,34 +98,39 @@ class VocalTracker(private val context: Context) {
 
     @Volatile private var session: OrtSession? = null
     @Volatile private var sessionThreads = 0
+    @Volatile private var sessionBackend: StemsAccelerator? = null
     private val lock = Any()
 
+    /**
+     * The session, rebuilt when either the thread budget or the chosen backend moves.
+     *
+     * The backend is part of the cache key for the obvious reason that it decides
+     * which provider the graph is partitioned for — reusing a CPU session after
+     * the user picked an accelerator would silently ignore the setting — and for
+     * a less obvious one: registering a different provider can fail, and a stale
+     * session would keep working and keep hiding that.
+     *
+     * The preference is resolved through
+     * [com.music.bitchord.playback.stems.StemsCapabilities.resolve] rather than used raw,
+     * so a rung this device cannot deliver degrades to a working backend instead of
+     * leaving separation with nothing.
+     */
     private fun session(): OrtSession? {
         val threads = AppSettings.automixPerformanceMode.value.inferenceThreads
-        session?.takeIf { sessionThreads == threads }?.let { return it }
+        val backend = StemsBackendProbe.capabilities(context).resolve(AppSettings.stemsAccelerator.value)
+        session?.takeIf { sessionThreads == threads && sessionBackend == backend }?.let { return it }
         synchronized(lock) {
-            session?.takeIf { sessionThreads == threads }?.let { return it }
+            session?.takeIf { sessionThreads == threads && sessionBackend == backend }?.let { return it }
             runCatching { session?.close() }
             session = null
+            sessionBackend = null
             return runCatching {
-                val file = File(context.filesDir, MODEL_ASSET)
-                if (!file.exists() || file.length() == 0L) {
-                    context.assets.open(MODEL_ASSET).use { input ->
-                        file.outputStream().use { output -> input.copyTo(output) }
-                    }
-                }
-                val options = OrtSession.SessionOptions().apply {
-                    setIntraOpNumThreads(threads)
-                    setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
-                    // Same reasoning as BeatTracker: the arena retains every block it allocates for
-                    // the life of the session, which a backgrounded music player cannot justify.
-                    setCPUArenaAllocator(false)
-                    setMemoryPatternOptimization(false)
-                }
-                OrtEnvironment.getEnvironment().createSession(file.absolutePath, options)
+                SeparationSessionFactory.create(context, backend, threads)
                     .also {
                         session = it
                         sessionThreads = threads
+                        sessionBackend = backend
+                        Log.i(TAG, "Vocal model ready on $backend with $threads intra-op threads")
                     }
             }.onFailure { Log.w(TAG, "Vocal model unavailable; no mask will be produced", it) }
                 .getOrNull()
@@ -261,12 +268,12 @@ class VocalTracker(private val context: Context) {
             runCatching { session?.close() }
             session = null
             sessionThreads = 0
+            sessionBackend = null
         }
     }
 
     companion object {
         private const val TAG = "BitChordVocalTracker"
-        private const val MODEL_ASSET = "vocals_umxhq_int8.onnx"
         /** The model's fixed input width, ~22.8 s, chosen upstream to cover a transition overlap. */
         const val FIXED_FRAMES = 960
 

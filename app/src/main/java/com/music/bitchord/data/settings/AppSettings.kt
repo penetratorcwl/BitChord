@@ -12,6 +12,8 @@ import com.music.bitchord.data.lyrics.LyricsSource
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.playback.EqLayout
 import com.music.bitchord.playback.EqualizerPreset
+import com.music.bitchord.playback.stems.StemsAccelerator
+import com.music.bitchord.playback.stems.StemsBackendProbe
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /**
@@ -292,6 +294,16 @@ object AppSettings {
     /** The CPU budget used by Beat This! and vocal analysis for Automix. */
     val automixPerformanceMode = MutableStateFlow(AutomixPerformanceMode.BALANCED)
     val skipSilence = MutableStateFlow(false)
+
+    /**
+     * Which execution provider the vocal-separation model is asked to use.
+     *
+     * A preference rather than an instruction: the effective backend is decided
+     * by [com.music.bitchord.playback.stems.StemsCapabilities.resolve], because a
+     * rung this device cannot deliver must not be able to turn separation off.
+     * Stored as the enum name so adding a rung cannot reinterpret an old value.
+     */
+    val stemsAccelerator = MutableStateFlow(StemsAccelerator.AUTO)
 
     /** Requested PCM representation at the Android AudioTrack boundary. */
     val outputPcmMode = MutableStateFlow(OutputPcmMode.PCM_16)
@@ -824,6 +836,11 @@ object AppSettings {
                 prefs.getString(KEY_AUTOMIX_PERFORMANCE_MODE, null) ?: AutomixPerformanceMode.BALANCED.name,
             )
         }.getOrDefault(AutomixPerformanceMode.BALANCED)
+        stemsAccelerator.value = runCatching {
+            StemsAccelerator.valueOf(
+                prefs.getString(KEY_STEMS_ACCELERATOR, null) ?: StemsAccelerator.AUTO.name,
+            )
+        }.getOrDefault(StemsAccelerator.AUTO)
         skipSilence.value = prefs.getBoolean(KEY_SKIP_SILENCE, false)
         outputPcmMode.value = runCatching {
             OutputPcmMode.valueOf(
@@ -1114,6 +1131,20 @@ object AppSettings {
     fun setAutomixPerformanceMode(value: AutomixPerformanceMode) {
         automixPerformanceMode.value = value
         prefs.edit().putString(KEY_AUTOMIX_PERFORMANCE_MODE, value.name).apply()
+    }
+
+    /**
+     * Records a new vocal-separation backend choice.
+     *
+     * The cached probe verdicts are dropped alongside it. They are about one
+     * device's drivers and one model, but a switch is the moment a user is most
+     * likely to be looking at a different rung's result, and re-measuring beats
+     * showing a number earned under a different setting.
+     */
+    fun setStemsAccelerator(value: StemsAccelerator) {
+        stemsAccelerator.value = value
+        prefs.edit().putString(KEY_STEMS_ACCELERATOR, value.name).apply()
+        StemsBackendProbe.invalidate()
     }
 
     fun setSkipSilence(value: Boolean) {
@@ -1938,6 +1969,7 @@ object AppSettings {
     private const val KEY_CROSSFADE = "crossfade_seconds"
     private const val KEY_SMART_FADE = "smart_fade_enabled"
     private const val KEY_AUTOMIX_PERFORMANCE_MODE = "automix_performance_mode"
+    private const val KEY_STEMS_ACCELERATOR = "stems_accelerator"
     private const val KEY_SKIP_SILENCE = "skip_silence"
     private const val KEY_OUTPUT_PCM_MODE = "output_pcm_mode"
     private const val KEY_PREFER_USB_DAC = "prefer_usb_dac"

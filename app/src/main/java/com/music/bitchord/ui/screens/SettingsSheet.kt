@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.DeveloperBoard
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FileDownload
@@ -147,6 +148,10 @@ import com.music.bitchord.data.settings.DownloadQuality
 import com.music.bitchord.data.settings.ThemeMode
 import com.music.bitchord.data.stats.Backup
 import com.music.bitchord.playback.AudioCache
+import com.music.bitchord.playback.stems.StemsAccelerator
+import com.music.bitchord.playback.stems.StemsBackendProbe
+import com.music.bitchord.playback.stems.StemsBackendState
+import com.music.bitchord.playback.stems.StemsCapabilities
 import com.music.bitchord.ui.player.fullBleedArtworkAvailable
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -188,6 +193,7 @@ fun SettingsScreen(
     val crossfade by AppSettings.crossfadeSeconds.collectAsStateWithLifecycle()
     val smartFade by AppSettings.smartFadeEnabled.collectAsStateWithLifecycle()
     val automixPerformance by AppSettings.automixPerformanceMode.collectAsStateWithLifecycle()
+    val stemsAccelerator by AppSettings.stemsAccelerator.collectAsStateWithLifecycle()
     val skipSilence by AppSettings.skipSilence.collectAsStateWithLifecycle()
     val dolbyAtmos by AppSettings.dolbyAtmos.collectAsStateWithLifecycle()
     // A property of the hardware, so it is read once rather than remembered
@@ -269,6 +275,7 @@ fun SettingsScreen(
     var picking by remember { mutableStateOf<QualityTarget?>(null) }
     var pickingDownloadQuality by remember { mutableStateOf(false) }
     var pickingAutomixPerformance by remember { mutableStateOf(false) }
+    var pickingStemsAccelerator by remember { mutableStateOf(false) }
     // What the last export or import did, shown on the row that did it rather
     // than as a toast: a backup is the one action here whose outcome nobody can
     // check by looking at the app afterwards. Held per direction, or an import's
@@ -643,6 +650,11 @@ fun SettingsScreen(
                 )
             }
             val automixPerformanceTitle = stringResource(R.string.automix_performance)
+            // Declared here, beside the Automix title, rather than inline at the
+            // row: this scope is composable, and `remember`'s calculation lambda
+            // below the sheet is not — a `LocalContext.current` read inside one
+            // would not compile.
+            val stemsAcceleratorTitle = stringResource(R.string.stems_accelerator)
             row(automixPerformanceTitle, "cpu", "battery") {
                 SettingsRow(
                     icon = Icons.Rounded.Tune,
@@ -650,6 +662,15 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.automix_performance_subtitle),
                     value = automixPerformance.localizedLabel(),
                     onClick = { pickingAutomixPerformance = true },
+                )
+            }
+            row(stemsAcceleratorTitle, "cpu", "memory") {
+                SettingsRow(
+                    icon = Icons.Rounded.DeveloperBoard,
+                    title = stemsAcceleratorTitle,
+                    subtitle = stringResource(R.string.stems_accelerator_subtitle),
+                    value = stemsAccelerator.localizedLabel(),
+                    onClick = { pickingStemsAccelerator = true },
                 )
             }
             val skipSilenceTitle = stringResource(R.string.skip_silence)
@@ -1452,6 +1473,25 @@ fun SettingsScreen(
         }
     }
 
+    if (pickingStemsAccelerator) {
+        ModalBottomSheet(
+            onDismissRequest = { pickingStemsAccelerator = false },
+            containerColor = MaterialTheme.colorScheme.background,
+        ) {
+            val stemsSheetContext = LocalContext.current
+            StemsAcceleratorSheet(
+                selected = stemsAccelerator,
+                capabilities = remember(stemsSheetContext) {
+                    StemsBackendProbe.capabilities(stemsSheetContext)
+                },
+                onSelect = { accelerator ->
+                    AppSettings.setStemsAccelerator(accelerator)
+                    pickingStemsAccelerator = false
+                },
+            )
+        }
+    }
+
     // Asked before the picker opens rather than after a file is chosen: the
     // thing being confirmed is that this device's own history is about to be
     // thrown away, and that is true whichever file gets picked.
@@ -1872,6 +1912,135 @@ private fun QualitySheet(
         }
     }
 }
+
+/**
+ * Backend picker for the vocal-separation model, with per-rung verdicts.
+ *
+ * Each option reports what this device can actually do with it rather than
+ * only what it is called, because the four rungs are not equally possible here:
+ * most phones cannot do three of them, and a rung that cannot run has to say
+ * *why* rather than simply being absent. A tap on a reachable option that has
+ * not been measured yet runs the measurement — one inference, off the main
+ * thread — so the next time the sheet opens the reason line carries real
+ * numbers instead of an assumption.
+ */
+@Composable
+private fun StemsAcceleratorSheet(
+    selected: StemsAccelerator,
+    capabilities: StemsCapabilities,
+    onSelect: (StemsAccelerator) -> Unit,
+) {
+    val haptics = LocalHapticFeedback.current
+    val context = LocalContext.current
+    var verifying by remember { mutableStateOf<StemsAccelerator?>(null) }
+
+    // Owned here rather than launched bare: the measurement can outlive the
+    // sheet (the user dismisses it mid-inference) and a coroutine with no owner
+    // would take the scope with it, leaving a session and a 16 MB tensor to be
+    // collected at whatever point GC reaches them.
+    val scope = rememberCoroutineScope()
+    val threads = AppSettings.automixPerformanceMode.value.inferenceThreads
+
+    Column(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+        Row(
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.DeveloperBoard,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = stringResource(R.string.stems_accelerator),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                Text(
+                    text = stringResource(R.string.stems_accelerator_warning),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outline)
+
+        StemsAccelerator.entries.forEach { accelerator ->
+            val probe = capabilities.probeFor(accelerator)
+            val chosen = accelerator == selected
+            val reachable = probe?.state?.usable ?: false
+            val busy = verifying == accelerator
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onSelect(accelerator)
+                        // Only the rungs with something to find out about are
+                        // worth measuring: a rung already known to be
+                        // unavailable has already given its answer, and AUTO is
+                        // a choice rather than a backend.
+                        if (accelerator != StemsAccelerator.AUTO &&
+                            probe?.state == StemsBackendState.UNVERIFIED
+                        ) {
+                            verifying = accelerator
+                            scope.launch {
+                                StemsBackendProbe.verify(context, accelerator, threads)
+                                verifying = null
+                            }
+                        }
+                    }
+                    .padding(horizontal = 22.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = accelerator.localizedLabel(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (reachable) {
+                            MaterialTheme.colorScheme.onBackground
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    Text(
+                        text = when {
+                            busy -> stringResource(R.string.stems_accelerator_testing)
+                            probe != null && !reachable -> probe.reason
+                            else -> accelerator.detail
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (chosen) {
+                    Spacer(Modifier.width(12.dp))
+                    Icon(
+                        Icons.Rounded.Check,
+                        contentDescription = stringResource(R.string.selected),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StemsAccelerator.localizedLabel(): String = stringResource(
+    when (this) {
+        StemsAccelerator.AUTO -> R.string.stems_accelerator_auto
+        StemsAccelerator.CPU -> R.string.stems_accelerator_cpu
+        StemsAccelerator.CPU_XNNPACK -> R.string.stems_accelerator_cpu_xnnpack
+        StemsAccelerator.ACCELERATOR -> R.string.stems_accelerator_accelerator
+        StemsAccelerator.SNAPDRAGON_NPU -> R.string.stems_accelerator_snapdragon
+    },
+)
 
 /** CPU budget picker for the background models that prepare Automix. */
 @Composable
