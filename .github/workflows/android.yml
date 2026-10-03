@@ -35,6 +35,15 @@ jobs:
         name: bitchord-dev-debug
         path: app/build/outputs/apk/dev/debug/*.apk
 
+    - name: Build Alt Debug APK
+      run: ./gradlew assembleAltDebug
+
+    - name: Upload Alt APK Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: bitchord-alt-debug
+        path: app/build/outputs/apk/alt/debug/*.apk
+
   build-prod-release:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
