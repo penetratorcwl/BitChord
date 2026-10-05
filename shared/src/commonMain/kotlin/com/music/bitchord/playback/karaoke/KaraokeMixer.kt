@@ -1,5 +1,7 @@
 package com.music.bitchord.playback.karaoke
 
+import kotlinx.coroutines.flow.StateFlow
+
 /**
  * Platform-agnostic interface for karaoke/vocal separation control.
  * Implemented per-platform (Android/Desktop) in jvmSharedMain.
@@ -40,7 +42,7 @@ sealed interface KaraokeState {
 }
 
 /** Preset gain configurations. */
-enum class KaraokePreset(val name: String, val vocalGainDb: Float, val instrumentalGainDb: Float) {
+enum class KaraokePreset(val label: String, val vocalGainDb: Float, val instrumentalGainDb: Float) {
     Original("Original", 0f, 0f),
     Sing("Sing", -10f, 0f),          // Vocal at ~30% (-10dB)
     Instrumental("Instrumental", Float.NEGATIVE_INFINITY, 0f),

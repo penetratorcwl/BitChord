@@ -147,7 +147,7 @@ fun KaraokeCapsule(
                                 else -> false
                             }
                             Text(
-                                text = preset.name,
+                                text = preset.label,
                                 fontSize = 10.sp,
                                 color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                 fontWeight = if (isActive) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal,
