@@ -590,6 +590,10 @@ class PlaybackService : MediaLibraryService() {
     private val loudnessB = LoudnessProcessor().apply { gainFor = ::loudnessGainFor }
     private var loudnessRetryJob: Job? = null
 
+    /** Karaoke/vocal separation mixers — one per player, like the other DSP stages. */
+    private val karaokeMixerA = KaraokeMixerImpl(this, scope, { player?.currentMediaItem }, { upstreamFactory })
+    private val karaokeMixerB = KaraokeMixerImpl(this, scope, { spare?.currentMediaItem }, { upstreamFactory })
+
     /** The platform audio session currently advertised to system audio tools. */
     private var advertisedAudioEffectSessionId: Int = C.AUDIO_SESSION_ID_UNSET
 
@@ -614,6 +618,21 @@ class PlaybackService : MediaLibraryService() {
 
     private fun spareLoudness(): LoudnessProcessor =
         if (activeFilter === transitionFilterA) loudnessB else loudnessA
+
+    /** Karaoke mixer on the session player. */
+    private fun activeKaraoke(): KaraokeMixer =
+        if (activeFilter === transitionFilterA) karaokeMixerA else karaokeMixerB
+
+    /** Karaoke mixer on the spare player. */
+    private fun spareKaraoke(): KaraokeMixer =
+        if (activeFilter === transitionFilterA) karaokeMixerB else karaokeMixerA
+
+    /** Static accessor for the active karaoke mixer (for UI). */
+    companion object {
+        @Volatile private var instance: PlaybackService? = null
+        val activeKaraokeMixer: KaraokeMixer?
+            get() = instance?.activeKaraoke()
+    }
 
     /** Automix's DSP analyzer — see [com.music.bitchord.playback.smart.TrackAnalyzer]. */
     private val trackAnalyzer = com.music.bitchord.playback.smart.TrackAnalyzer(this, AudioCache)
@@ -1211,6 +1230,7 @@ class PlaybackService : MediaLibraryService() {
         if (com.music.bitchord.data.innertube.Innertube.cookie == null) {
             com.music.bitchord.data.innertube.Innertube.cookie = com.music.bitchord.auth.AuthStore(this).cookie
         }
+        instance = this
 
         // First, because everything below assumes it is standing up fresh and
         // one of the two ways this service starts does not give it that.
@@ -5566,7 +5586,9 @@ class PlaybackService : MediaLibraryService() {
             // them for the same reason: it belongs to the listener and
             // the whole session, while the transition filter belongs to
             // one handoff and has to have the last word on it.
-            val dspChain = DspChain(spatial, equalizer, transition, loudness)
+            // Karaoke mixer runs after transition filter, before loudness.
+            val karaoke = if (activeFilter === transitionFilterA) karaokeMixerA else karaokeMixerB
+            val dspChain = DspChain(spatial, equalizer, transition, karaoke, loudness)
             return PrecisionAudioSink(
                 delegate = defaultSink,
                 dspChain = dspChain,
@@ -6475,6 +6497,10 @@ class PlaybackService : MediaLibraryService() {
         serviceLyrics = null
         cancelPrefetch()
         trackAnalyzer.release()
+        karaokeMixerA.release()
+        karaokeMixerB.release()
+        instance = null
+        super.onDestroy()
         loudnessRetryJob?.cancel()
         // The YouTube Music history entry for whatever was playing, closed out
         // on the same terms as the ListenBrainz submit below: a swipe-away never

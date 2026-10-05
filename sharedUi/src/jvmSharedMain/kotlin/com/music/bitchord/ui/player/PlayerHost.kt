@@ -14,6 +14,7 @@ import com.music.bitchord.data.settings.LastPlayerScreen
 import com.music.bitchord.data.settings.SmartAnalysis
 import com.music.bitchord.data.settings.MixBlend
 import com.music.bitchord.data.settings.TransitionWindow
+import com.music.bitchord.playback.karaoke.KaraokeMixer
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +31,9 @@ import kotlinx.coroutines.flow.StateFlow
  */
 interface PlayerHost {
     val settings: PlayerSettingsSource
+
+    /** The karaoke mixer for vocal separation control. Null on platforms without karaoke. */
+    val karaokeMixer: KaraokeMixer?
 
     /** A Canvas already settled for [song], without a lookup. */
     fun cachedCanvas(song: Song): CanvasArtwork?

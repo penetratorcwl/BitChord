@@ -770,6 +770,9 @@ fun NowPlayingScreen(
     // itself (create/join) when there isn't one.
     val openListenTogetherMembers: () -> Unit = { showListenTogetherMembers = true }
 
+    /** Karaoke capsule visibility. */
+    var showKaraokeCapsule by remember { mutableStateOf(false) }
+
     val syncedLyricsEnabled by PlayerSettings.syncedLyrics.collectAsStateWithLifecycle()
     val lyricsOffsetMs by PlayerSettings.lyricsOffsetMs.collectAsStateWithLifecycle()
     // A lambda, not a value: read by the lyric strip and panel in scopes of
@@ -1557,6 +1560,16 @@ fun NowPlayingScreen(
                 onDismiss = { lyricsShare = null },
             )
         }
+        if (showKaraokeCapsule) {
+            val karaokeMixer = PlayerPlatform.host.karaokeMixer
+            if (karaokeMixer != null) {
+                KaraokeCapsule(
+                    karaokeMixer = karaokeMixer,
+                    onDismiss = { showKaraokeCapsule = false },
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 100.dp, end = 16.dp),
+                )
+            }
+        }
     }
 
     // A landscape window — a tablet, or a phone on its side — takes an entirely
@@ -1929,6 +1942,7 @@ fun NowPlayingScreen(
                     )
                 },
                 lyricsPane = {
+                    val karaokeMixer = PlayerPlatform.host.karaokeMixer
                     LandscapeLyricsPane(
                         hasLyrics = lyricsTranslation.displayedLyrics.isNotEmpty(),
                         placeholder = if (lyricsUnavailable) {
@@ -1947,21 +1961,26 @@ fun NowPlayingScreen(
                                 onShare = lyricPicker.share,
                             )
                         },
-                        romanizationToggle = {
-                            RomanizationToggleButton(
-                                state = lyricsTranslation.romanizationState,
+                        romanizationWithTranslationToggle = {
+                            RomanizationWithTranslationButton(
+                                romanizationState = lyricsTranslation.romanizationState,
+                                translationState = lyricsTranslation.translationState,
                                 showingRomanization = lyricsTranslation.showingRomanization,
-                                enabled = !lyrics.isNullOrEmpty(),
-                                onClick = lyricsTranslation.toggleRomanization,
-                            )
-                        },
-                        translationToggle = {
-                            TranslationToggleButton(
-                                state = lyricsTranslation.translationState,
                                 showingTranslation = lyricsTranslation.showingTranslation,
                                 enabled = !lyrics.isNullOrEmpty(),
-                                onClick = lyricsTranslation.toggleTranslation,
+                                onRomanizationClick = lyricsTranslation.toggleRomanization,
+                                onTranslationClick = lyricsTranslation.toggleTranslation,
                             )
+                        },
+                        karaokeToggle = {
+                            if (karaokeMixer != null) {
+                                KaraokeToggleButton(
+                                    karaokeMixer = karaokeMixer,
+                                    onDismiss = { showKaraokeCapsule = false },
+                                    enabled = true,
+                                    onClick = { showKaraokeCapsule = true },
+                                )
+                            }
                         },
                     ) { panelModifier ->
                         LyricsTranslationMotion(
@@ -3325,32 +3344,36 @@ fun NowPlayingScreen(
                         animationSpec = tween(if (translateShown) 220 else 160),
                         label = "translateFade",
                     )
+                    val karaokeMixer = PlayerPlatform.host.karaokeMixer
                     if (translateFade > 0.01f && !lyricPicker.picking) {
                         Box(
                             modifier = Modifier
                                 .align(Alignment.BottomStart)
                                 .graphicsLayer { alpha = translateFade },
                         ) {
-                            RomanizationToggleButton(
-                                state = lyricsTranslation.romanizationState,
+                            RomanizationWithTranslationButton(
+                                romanizationState = lyricsTranslation.romanizationState,
+                                translationState = lyricsTranslation.translationState,
                                 showingRomanization = lyricsTranslation.showingRomanization,
+                                showingTranslation = lyricsTranslation.showingTranslation,
                                 enabled = translateShown && !lyrics.isNullOrEmpty(),
-                                onClick = lyricsTranslation.toggleRomanization,
+                                onRomanizationClick = lyricsTranslation.toggleRomanization,
+                                onTranslationClick = lyricsTranslation.toggleTranslation,
                             )
                         }
-                        Box(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .graphicsLayer { alpha = translateFade },
-                        ) {
-                            TranslationToggleButton(
-                                state = lyricsTranslation.translationState,
-                                showingTranslation = lyricsTranslation.showingTranslation,
-                                // Not tappable on the way out: a disc at 20%
-                                // opacity is on its way to gone, not a target.
-                                enabled = translateShown && !lyrics.isNullOrEmpty(),
-                                onClick = lyricsTranslation.toggleTranslation,
-                            )
+                        if (karaokeMixer != null) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomEnd)
+                                    .graphicsLayer { alpha = translateFade },
+                            ) {
+                                KaraokeToggleButton(
+                                    karaokeMixer = karaokeMixer,
+                                    onDismiss = { showKaraokeCapsule = false },
+                                    enabled = translateShown,
+                                    onClick = { showKaraokeCapsule = true },
+                                )
+                            }
                         }
                     }
                     // The bar arrives and leaves without a transition of its own:

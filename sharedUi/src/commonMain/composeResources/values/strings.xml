@@ -122,6 +122,10 @@
     <string name="translate_lyrics">Translate lyrics</string>
     <string name="translating_lyrics_to">Translating to %1$s…</string>
     <string name="up_next">Up next</string>
+    <string name="karaoke_enable">Enable karaoke</string>
+    <string name="karaoke_disable">Disable karaoke</string>
+    <string name="karaoke_close">Close karaoke</string>
+    <string name="karaoke_preparing">Preparing karaoke…</string>
     <string name="upgrading_quality">Upgrading quality</string>
     <string name="waiting">waiting</string>
     <string name="widget_next">Next</string>

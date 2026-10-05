@@ -732,4 +732,28 @@ object BitChordIcons {
             }
         }.build()
     }
+
+    /** Microphone for karaoke/sing mode. */
+    val Mic: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "bc_mic",
+            defaultWidth = 24.dp, defaultHeight = 24.dp,
+            viewportWidth = 24f, viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = stroke,
+                strokeLineWidth = STROKE,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // Mic body
+                moveTo(12f, 4.5f)
+                arcToRelative(4f, 4f, 0f, isMoreThanHalf = false, isPositiveArc = true, 0f, 8f)
+                // Stand
+                moveTo(12f, 12.5f); lineTo(12f, 18f)
+                // Base
+                moveTo(7f, 18f); lineTo(17f, 18f)
+            }
+        }.build()
+    }
 }

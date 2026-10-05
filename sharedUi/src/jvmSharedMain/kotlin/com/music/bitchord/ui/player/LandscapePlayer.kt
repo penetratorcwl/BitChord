@@ -495,8 +495,10 @@ internal fun LandscapeLyricsPane(
     picking: Boolean = false,
     /** The pick bar itself, drawn in place of the row below. */
     pickBar: @Composable () -> Unit = {},
-    romanizationToggle: @Composable () -> Unit,
-    translationToggle: @Composable () -> Unit,
+    /** Combined romanization + translation toggle (left). */
+    romanizationWithTranslationToggle: @Composable () -> Unit,
+    /** Karaoke toggle (right). */
+    karaokeToggle: @Composable () -> Unit,
     modifier: Modifier = Modifier,
     panel: @Composable (Modifier) -> Unit,
 ) {
@@ -537,7 +539,7 @@ internal fun LandscapeLyricsPane(
         ) {
             // Fixed slots either side whether or not the toggles are drawn, so
             // the status line stays centred as lyrics arrive.
-            Box(Modifier.size(34.dp)) { if (hasLyrics) romanizationToggle() }
+            Box(Modifier.size(34.dp)) { if (hasLyrics) romanizationWithTranslationToggle() }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -549,7 +551,7 @@ internal fun LandscapeLyricsPane(
                     onStatusClick = onStatusClick,
                 )
             }
-            Box(Modifier.size(34.dp)) { if (hasLyrics) translationToggle() }
+            Box(Modifier.size(34.dp)) { if (hasLyrics) karaokeToggle() }
         }
         }
     }

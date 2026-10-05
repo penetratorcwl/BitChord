@@ -6,12 +6,13 @@ import com.music.bitchord.playback.EqualizerProcessor
 import com.music.bitchord.playback.LoudnessProcessor
 import com.music.bitchord.playback.SpatialAudioProcessor
 import com.music.bitchord.playback.TransitionFilterProcessor
+import com.music.bitchord.playback.karaoke.KaraokeMixer
 
 /**
  * Composite DSP chain executing BitChord's custom audio processors in their canonical sequence:
  *
  * AudioBlock(Float32) -> SpatialAudioProcessor -> EqualizerProcessor
- *   -> TransitionFilterProcessor -> LoudnessProcessor -> AudioBlock(Float32)
+ *   -> TransitionFilterProcessor -> KaraokeMixer -> LoudnessProcessor -> AudioBlock(Float32)
  *
  * Operates purely on in-place Float32 audio blocks without intermediate fixed-point quantization,
  * preserving full dynamic range and headroom.
@@ -33,6 +34,7 @@ class DspChain(
     val spatial: SpatialAudioProcessor = SpatialAudioProcessor(),
     val equalizer: EqualizerProcessor = EqualizerProcessor(),
     val transition: TransitionFilterProcessor = TransitionFilterProcessor(),
+    val karaoke: KaraokeMixer? = null,
     val loudness: LoudnessProcessor = LoudnessProcessor(),
 ) : FloatAudioProcessor {
 
@@ -44,6 +46,7 @@ class DspChain(
         spatial.configure(sampleRate, channelCount)
         equalizer.configure(sampleRate, channelCount)
         transition.configure(sampleRate, channelCount)
+        karaoke?.configure(sampleRate, channelCount)
         loudness.configure(sampleRate, channelCount)
     }
 
@@ -65,10 +68,11 @@ class DspChain(
                     val spatialOn = spatial.enabled
                     val eqOn = equalizer.isEnabled
                     val transitionOn = transition.isFiltering
+                    val karaokeOn = karaoke?.isEnabled == true
                     Log.d(
                         TAG,
                         "process() #$count frames=$frames sr=$sr " +
-                            "spatial=$spatialOn eq=$eqOn transition=$transitionOn",
+                            "spatial=$spatialOn eq=$eqOn transition=$transitionOn karaoke=$karaokeOn",
                     )
                 } catch (_: Throwable) {
                 }
@@ -78,6 +82,7 @@ class DspChain(
         spatial.process(block)
         equalizer.process(block)
         transition.process(block)
+        karaoke?.process(block)
         loudness.process(block)
     }
 
@@ -86,6 +91,7 @@ class DspChain(
         spatial.flush()
         equalizer.flush()
         transition.flush()
+        karaoke?.flush()
         loudness.flush()
     }
 
@@ -94,6 +100,7 @@ class DspChain(
         spatial.reset()
         equalizer.reset()
         transition.reset()
+        karaoke?.reset()
         loudness.reset()
     }
 

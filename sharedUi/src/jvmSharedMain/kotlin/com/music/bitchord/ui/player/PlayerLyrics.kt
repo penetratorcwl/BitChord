@@ -1344,6 +1344,123 @@ internal fun RomanizationToggleButton(
 }
 
 /**
+ * Karaoke toggle button — replaces translation button.
+ * Opens the karaoke capsule with vocal volume slider.
+ */
+@Composable
+internal fun KaraokeToggleButton(
+    karaokeMixer: KaraokeMixer,
+    onDismiss: () -> Unit,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val state = karaokeMixer.state.collectAsStateWithLifecycle()
+    val active = karaokeMixer.isEnabled || state.value is KaraokeMixer.KaraokeState.Preparing
+    val tint = when {
+        !enabled -> Color.White.copy(alpha = 0.42f)
+        active -> Color.White
+        else -> Color.White.copy(alpha = 0.78f)
+    }
+    val discAlpha by animateFloatAsState(
+        targetValue = if (active) 0.34f else 0.18f,
+        label = "karaokeDisc",
+    )
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = discAlpha))
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (state.value is KaraokeMixer.KaraokeState.Preparing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = tint,
+                strokeWidth = 1.7.dp,
+            )
+        } else {
+            Icon(
+                imageVector = BitChordIcons.Mic,
+                contentDescription = stringResource(
+                    if (karaokeMixer.isEnabled) Res.string.karaoke_disable
+                    else Res.string.karaoke_enable,
+                ),
+                tint = tint,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Combined Romanization + Translation button.
+ * Clicking romanization toggles romanization; long-press or secondary action shows translation sub-menu.
+ */
+@Composable
+internal fun RomanizationWithTranslationButton(
+    romanizationState: LyricsTranslationUiState,
+    translationState: LyricsTranslationUiState,
+    showingRomanization: Boolean,
+    showingTranslation: Boolean,
+    enabled: Boolean,
+    onRomanizationClick: () -> Unit,
+    onTranslationClick: () -> Unit,
+) {
+    val romanizationActive = showingRomanization || romanizationState is LyricsTranslationUiState.Loading
+    val translationActive = showingTranslation || translationState is LyricsTranslationUiState.Loading
+    val anyActive = romanizationActive || translationActive
+    val tint = when {
+        !enabled || romanizationState is LyricsTranslationUiState.SameLanguage && translationState is LyricsTranslationUiState.SameLanguage -> Color.White.copy(alpha = 0.42f)
+        anyActive -> Color.White
+        else -> Color.White.copy(alpha = 0.78f)
+    }
+    val discAlpha by animateFloatAsState(
+        targetValue = if (anyActive) 0.34f else 0.18f,
+        label = "romanizeTranslateDisc",
+    )
+    Box(
+        modifier = Modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = discAlpha))
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onRomanizationClick,
+            )
+            .combinedClickable(
+                onLongClick = { onTranslationClick() },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (romanizationState is LyricsTranslationUiState.Loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = tint,
+                strokeWidth = 1.7.dp,
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Language,
+                contentDescription = stringResource(
+                    if (showingRomanization) Res.string.show_original_lyrics
+                    else Res.string.romanize_lyrics,
+                ),
+                tint = tint,
+                modifier = Modifier.size(19.dp),
+            )
+        }
+    }
+}
+
+/**
  * A short text-material transition: the list and its playback clock stay in
  * place while a field of tiny glyph-like particles resolves into the new text.
  * Only the dedicated Canvas drawing moves, so changing language never causes a

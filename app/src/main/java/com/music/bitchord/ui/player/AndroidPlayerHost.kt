@@ -22,7 +22,9 @@ import com.music.bitchord.data.settings.AppSettings
 import com.music.bitchord.data.settings.LastPlayerScreen
 import com.music.bitchord.playback.AudioOutputStatus
 import com.music.bitchord.playback.AudioRouting
-import com.music.bitchord.playback.cast.CastController
+import com.music.bitchord.playback.PlaybackService
+import com.music.bitchord.playback.karaoke.KaraokeMixer
+import com.music.bitchord.playback.karaoke.KaraokeMixerImpl
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +49,10 @@ class AndroidPlayerHost(context: Context) : PlayerHost {
     private val app = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val main = Handler(Looper.getMainLooper())
+
+    /** Accesses the active karaoke mixer from PlaybackService. */
+    override val karaokeMixer: KaraokeMixer?
+        get() = PlaybackService.activeKaraokeMixer
 
     override val settings: PlayerSettingsSource = object : PlayerSettingsSource {
         override val animatedCanvas get() = AppSettings.animatedCanvas
