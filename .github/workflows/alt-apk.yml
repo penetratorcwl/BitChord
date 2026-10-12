@@ -39,7 +39,10 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Signed Alt Release APK
-        run: ./gradlew :app:assembleAltRelease
+        # No watch inside test builds: the Wear bundle needs its own full
+        # build per phone build (see BundleWearApk), doubling CI minutes
+        # for an APK nobody sideloads onto a watch from here.
+        run: ./gradlew :app:assembleAltRelease -Pbitchord.bundleWear=false
 
       - name: Upload arm64 APK Artifact
         uses: actions/upload-artifact@v4
