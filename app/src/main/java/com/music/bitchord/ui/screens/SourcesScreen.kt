@@ -1,5 +1,17 @@
 package com.music.bitchord.ui.screens
 
+import com.music.bitchord.ui.icons.SfIcons
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.music.bitchord.playback.audio.LosslessOutput
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Column
@@ -14,11 +26,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.FileDownloadOff
 import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.Storage
 import androidx.compose.material.icons.rounded.Extension
@@ -27,8 +41,7 @@ import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import com.music.bitchord.ui.components.IosSwitch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -56,6 +69,7 @@ import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.music.bitchord.R
 import com.music.bitchord.data.settings.AppSettings
+import com.music.bitchord.data.settings.permits
 import com.music.bitchord.data.smb.SmbRepository
 import com.music.bitchord.data.webdav.WebDavRepository
 import com.music.bitchord.data.settings.AudioQuality
@@ -125,14 +139,17 @@ fun SourcesScreen(
 
     /** Last known reachability per source, filled in as the probes come back. */
     val health = remember { mutableStateMapOf<String, SourceHealth>() }
+    val losslessOutput by LosslessOutput.state.collectAsStateWithLifecycle()
 
     // Every source that has a server to reach is probed, so an addon gets a
     // reachability line — which is the only feedback that a URL just pasted in
     // was any good, and the only place a manifest that fails validation gets to
-    // say why.
-    val probeKey = configs.filter { it.kind.needsServer }.joinToString { "${it.id}@${it.baseUrl}" }
+    // say why. Except an addon waiting on a lossless output: it is not to be
+    // contacted at all until one is connected, and connecting one re-runs this.
+    val probeKey = configs.filter { it.kind.needsServer }
+        .joinToString { "${it.id}@${it.baseUrl}@${it.checkValidLossless}" } + "@${losslessOutput.capable}"
     LaunchedEffect(probeKey) {
-        configs.filter { it.kind.needsServer && it.isComplete }.forEach { config ->
+        configs.filter { it.kind.needsServer && it.isComplete && !it.awaitsLosslessOutput }.forEach { config ->
             val source = SourceRegistry.instance(config.id) ?: return@forEach
             health[config.id] = withContext(Dispatchers.IO) {
                 runCatching { source.health() }
@@ -178,12 +195,7 @@ fun SourcesScreen(
             .verticalScroll(rememberScrollState())
             .padding(contentPadding),
     ) {
-        Text(
-            text = stringResource(R.string.source),
-            style = MaterialTheme.typography.displayLarge,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 14.dp),
-        )
+        SettingsPageTitle(stringResource(R.string.source))
 
         SettingsGroup(
             header = stringResource(R.string.sources_order_header),
@@ -225,6 +237,7 @@ fun SourcesScreen(
                         // connection keeps meaning "…and here is what it costs
                         // today".
                         skippedByQuality = config.enabled && !ceiling.permits(config.kind),
+                        awaitingOutput = if (config.enabled && config.awaitsLosslessOutput) losslessOutput else null,
                         onMetered = metered == true,
                         ceiling = ceiling,
                         // Anything the user configured is theirs to edit or
@@ -262,6 +275,16 @@ fun SourcesScreen(
                 row(addons.size + index + 1, config, null)
             }
 
+            // The one shut-out an addon can't tell apart from "not lossless":
+            // headphones on LDAC, LHDC or SSC UHQ whose codec Android won't name without
+            // the Nearby devices permission. Offered only then, and only from
+            // here, where the reason for asking is on screen.
+            val waiting = configs.any { it.enabled && it.awaitsLosslessOutput }
+            if (waiting && losslessOutput.bluetoothCodecUnknown) {
+                RowDivider()
+                BluetoothCodecPermissionRow()
+            }
+
             RowDivider()
             AddSourceRow(
                 onClick = { onEditSource(SourceConfig(kind = SourceKind.ADDON)) },
@@ -273,7 +296,7 @@ fun SourcesScreen(
         // so it takes no part in the ranking and gets its own group. The
         // editor is raised to the activity like every other alert.
         RemoteLibrarySection(
-            icon = Icons.Rounded.Cloud,
+            icon = SfIcons.Cloud,
             title = stringResource(R.string.webdav),
             description = stringResource(R.string.webdav_description),
             subtitle = if (webdavUrl.isBlank()) {
@@ -298,7 +321,7 @@ fun SourcesScreen(
         // for the same reason: it holds the listener's own files instead of
         // answering for YouTube's, so it takes no part in the ranking above.
         RemoteLibrarySection(
-            icon = Icons.Rounded.Storage,
+            icon = SfIcons.Storage,
             title = stringResource(R.string.smb),
             description = stringResource(R.string.smb_description),
             subtitle = if (smbHost.isBlank() || smbShare.isBlank()) {
@@ -330,7 +353,7 @@ fun SourcesScreen(
             footer = stringResource(R.string.upgrade_length_slack_footer),
         ) {
             SliderRow(
-                icon = Icons.Rounded.Tune,
+                icon = SfIcons.Tune,
                 title = stringResource(R.string.upgrade_length_slack),
                 subtitle = stringResource(R.string.upgrade_length_slack_subtitle),
                 value = stringResource(R.string.seconds_short, upgradeLengthSlackSeconds),
@@ -381,7 +404,7 @@ private fun RemoteLibrarySection(
         if (configured) {
             RowDivider()
             SettingsRow(
-                icon = Icons.Rounded.Dns,
+                icon = SfIcons.Dns,
                 title = if (testing) {
                     stringResource(R.string.testing)
                 } else {
@@ -410,7 +433,7 @@ private fun RemoteLibrarySection(
             )
             RowDivider()
             SettingsRow(
-                icon = Icons.Rounded.DeleteSweep,
+                icon = SfIcons.DeleteSweep,
                 title = disconnectTitle,
                 onClick = {
                     onDisconnect()
@@ -503,7 +526,7 @@ private fun ReorderableAddons(
             ) {
                 row(index + 1, config) {
                     Icon(
-                        imageVector = Icons.Rounded.DragHandle,
+                        imageVector = SfIcons.DragHandle,
                         contentDescription = stringResource(R.string.drag_to_reorder),
                         tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                         modifier = Modifier
@@ -615,7 +638,7 @@ private fun AddSourceRow(onClick: () -> Unit) {
         // the plus reads as belonging to the same column the list is indexed by.
         Spacer(Modifier.width(24.dp))
         Icon(
-            imageVector = Icons.Rounded.Add,
+            imageVector = SfIcons.Add,
             contentDescription = null,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.size(ICON_SIZE),
@@ -637,6 +660,86 @@ private fun AddSourceRow(onClick: () -> Unit) {
     }
 }
 
+/**
+ * Asks for Nearby devices so the Bluetooth codec can be read — the only way an
+ * LDAC, LHDC or SSC UHQ headset qualifies for an addon's `checkValidLossless`. Draws
+ * nothing where the permission does not exist (before Android 12) or is
+ * already granted, since asking again would do nothing.
+ */
+@Composable
+private fun BluetoothCodecPermissionRow() {
+    val context = LocalContext.current
+    val permission = "android.permission.BLUETOOTH_CONNECT"
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    fun isGranted() =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    var granted by remember { mutableStateOf(isGranted()) }
+    var denied by remember { mutableStateOf(false) }
+    val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        granted = ok
+        denied = !ok
+        if (ok) LosslessOutput.refresh()
+    }
+    // Back from system Settings, where it may have been switched on.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        val now = isGranted()
+        if (now && !granted) LosslessOutput.refresh()
+        granted = now
+        if (now) denied = false
+    }
+    // Asked as soon as the screen shows the shut-out it would fix, and again
+    // on every later visit, since this row is composed afresh each time. After
+    // a second refusal Android answers without a dialog, which lands in
+    // [denied] and the Settings prompt below.
+    LaunchedEffect(Unit) {
+        if (!isGranted()) ask.launch(permission)
+    }
+    if (granted) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                if (denied) {
+                    context.startActivity(
+                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(Uri.fromParts("package", context.packageName, null)),
+                    )
+                } else {
+                    ask.launch(permission)
+                }
+            }
+            .heightIn(min = 60.dp)
+            .padding(horizontal = ROW_INSET, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(24.dp))
+        Icon(
+            imageVector = SfIcons.Bluetooth,
+            contentDescription = null,
+            tint = if (denied) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(ICON_SIZE),
+        )
+        Spacer(Modifier.width(ICON_GAP))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = stringResource(
+                    if (denied) R.string.lossless_output_permission_denied else R.string.lossless_output_permission,
+                ),
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (denied) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = stringResource(
+                    if (denied) R.string.lossless_output_permission_denied_detail else R.string.lossless_output_permission_detail,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
+        }
+    }
+}
+
 @Composable
 private fun SourceRow(
     position: Int,
@@ -647,6 +750,8 @@ private fun SourceRow(
     onToggle: ((Boolean) -> Unit)?,
     /** On, but skipped by the ceiling the current connection is set to. */
     skippedByQuality: Boolean = false,
+    /** On, but its addon needs a lossless output and this is what is connected instead. Null when not waiting. */
+    awaitingOutput: LosslessOutput.State? = null,
     /** Which of the two ceilings [ceiling] is, so the row can name it. */
     onMetered: Boolean = false,
     ceiling: AudioQuality = AudioQuality.LOSSLESS,
@@ -661,7 +766,7 @@ private fun SourceRow(
     // Dimmed for the same reason an off source is: it is not in the walk. The
     // switch stays where the user left it, so the row reads "on, but not
     // today" rather than "off".
-    val dimmed = !config.enabled || skippedByQuality
+    val dimmed = !config.enabled || skippedByQuality || awaitingOutput != null
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -681,11 +786,11 @@ private fun SourceRow(
         Spacer(Modifier.width(6.dp))
         Icon(
             imageVector = when (config.kind) {
-                SourceKind.ADDON -> Icons.Rounded.Extension
-                SourceKind.CUSTOM_MODULE -> Icons.Rounded.Extension
-                SourceKind.MODULE -> Icons.Rounded.Extension
-                SourceKind.JIOSAAVN -> Icons.Rounded.GraphicEq // or some other icon
-                SourceKind.YOUTUBE -> Icons.Rounded.PlayCircle
+                SourceKind.ADDON -> SfIcons.Extension
+                SourceKind.CUSTOM_MODULE -> SfIcons.Extension
+                SourceKind.MODULE -> SfIcons.Extension
+                SourceKind.JIOSAAVN -> SfIcons.GraphicEq // or some other icon
+                SourceKind.YOUTUBE -> SfIcons.PlayCircle
             },
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onBackground,
@@ -710,17 +815,28 @@ private fun SourceRow(
                 // The ceiling outranks the health line: a source that isn't
                 // going to be asked at all is not usefully described by
                 // whether its server answered a probe.
-                text = if (skippedByQuality) {
-                    stringResource(
+                text = when {
+                    // Outranks the ceiling: this one is not reached on *any*
+                    // connection until the output changes.
+                    awaitingOutput != null -> when {
+                        awaitingOutput.bluetoothCodecUnknown ->
+                            stringResource(R.string.source_needs_lossless_bt_unknown)
+                        awaitingOutput.bluetoothCodec != null ->
+                            stringResource(R.string.source_needs_lossless_bt_codec, awaitingOutput.bluetoothCodec)
+                        else -> stringResource(R.string.source_needs_lossless_output)
+                    }
+                    skippedByQuality -> stringResource(
                         R.string.source_skipped_by_quality,
                         stringResource(if (onMetered) R.string.mobile_data else R.string.wifi),
                         ceiling.localizedLabel(),
                     )
-                } else {
-                    config.statusLine(health)
+                    else -> config.statusLine(health)
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = when {
+                    // A warning, not a fault: the addon is fine, the output is
+                    // what has to change — but it is something to act on.
+                    awaitingOutput != null -> MaterialTheme.colorScheme.error
                     // Only a rejection is coloured, and only when it is what
                     // the line actually says. A server that is merely down
                     // will be up again without anyone doing anything, and
@@ -732,6 +848,37 @@ private fun SourceRow(
                 },
                 maxLines = 2,
             )
+            // The addon's own `allowDownloads`, on a line of its own and both
+            // ways round, so whether downloads come from it is answered here
+            // rather than found out from where a downloaded file came from.
+            // Read off the stored manifest, so it holds while the server is
+            // down too.
+            if (config.kind == SourceKind.ADDON && config.isComplete) {
+                Row(
+                    modifier = Modifier.padding(top = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = if (config.allowDownloads) {
+                            SfIcons.Download
+                        } else {
+                            SfIcons.FileDownloadOff
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = stringResource(
+                            if (config.allowDownloads) R.string.source_downloads_on else R.string.source_downloads_off,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
         }
         Spacer(Modifier.width(8.dp))
         if (onToggle == null) {
@@ -741,13 +888,9 @@ private fun SourceRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Switch(
+            IosSwitch(
                 checked = config.enabled,
                 onCheckedChange = onToggle,
-                colors = SwitchDefaults.colors(
-                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                    checkedBorderColor = MaterialTheme.colorScheme.primary,
-                ),
             )
         }
         // Outside the dimming above, and last in the row. A source switched off
@@ -775,6 +918,7 @@ private fun AudioQuality.localizedLabel(): String = stringResource(
 private fun SourceConfig.statusLine(health: SourceHealth?): String = when {
     !isComplete -> stringResource(R.string.source_setup_required)
     kind == SourceKind.JIOSAAVN -> stringResource(R.string.jiosaavn_mismatch_warning)
+    // Downloads are a line of their own under this one — see [SourceRow].
     health is SourceHealth.Ok -> listOfNotNull(
         health.detail,
         kind.labels.take(3).joinToString(" · "),
