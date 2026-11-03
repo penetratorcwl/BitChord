@@ -53,6 +53,21 @@ val listenTogetherServer: String = (
         ?: "https://bitchord-listen-together.onrender.com"
     ).trim().trimEnd('/')
 
+/*
+ * Which ABIs a build packages. Default is the full split set plus the universal
+ * APK; `-PabiFilters=arm64-v8a` (or an `ABI_FILTERS` line in local.properties
+ * or the environment) narrows it instead. With filters named there is no
+ * universal to speak of — the set *is* what ships. (AGP forbids mirroring the
+ * list into `ndk.abiFilters` alongside splits, so native compiles as it always
+ * has and the unasked-for outputs simply go unpackaged.)
+ */
+val requestedAbis: List<String>? = (
+    providers.gradleProperty("abiFilters").orNull
+        ?: localProps.getProperty("ABI_FILTERS")
+        ?: System.getenv("ABI_FILTERS")
+    )?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+    ?.takeIf { it.isNotEmpty() }
+
 // See the root build.gradle.kts: one version for the phone and its watch app.
 val betaSuffix = rootProject.extra["bitchordBetaSuffix"] as String
 
@@ -90,8 +105,9 @@ android {
         abi {
             isEnable = true
             reset()
-            include("armeabi-v7a", "arm64-v8a", "x86_64")
-            isUniversalApk = true
+            val abis = requestedAbis
+            if (abis != null) include(*abis.toTypedArray()) else include("armeabi-v7a", "arm64-v8a", "x86_64")
+            isUniversalApk = requestedAbis == null
         }
     }
 

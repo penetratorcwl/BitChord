@@ -1,0 +1,56 @@
+name: Dev APK Release
+
+# Rolling GitHub Release holding the latest dev-debug arm64-v8a APK of the
+# liked-state fix branch: no artifacts to dig through, one place to download.
+on:
+  push:
+    branches: [fix/likes]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dev-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arm64:
+    name: Dev APK · arm64-v8a
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Empty values are a supported state (see the fallbacks in
+      # app/build.gradle.kts); no signing — the debug flavor rides on AGP's
+      # throwaway key.
+      - name: Write local.properties
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
+          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+          echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
+
+      - run: chmod +x gradlew
+
+      # arm64-v8a only: no v7, no universal, no x86 (see app/build.gradle.kts).
+      - name: Build the dev APK
+        run: ./gradlew :app:assembleDevDebug -PabiFilters=arm64-v8a
+
+      - name: Publish the rolling dev release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APK=app/build/outputs/apk/dev/debug/app-dev-arm64-v8a-debug.apk
+          gh release create dev-debug \
+            --prerelease \
+            --title "BitChord Dev · arm64-v8a (rolling)" \
+            --notes "Latest push to ${GITHUB_REF_NAME}: per-track like status, durable liked sync. Debug keystore, dev flavor (com.dev.bitchord)." \
+            "$APK" || gh release upload dev-debug --clobber "$APK"
