@@ -15,6 +15,7 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,7 +24,8 @@ import org.junit.Test
  * The liked-music sync behind issue #219: a liked collection larger than one
  * page (or than the old ten-page cap) must still have every id recognised as
  * liked, without holding the library page open, and a track menu that says
- * nothing about a rating must never downgrade a LIKE already known.
+ * nothing about a rating must never downgrade a LIKE already known. A page
+ * that only hiccups must not abandon the rest of the collection either.
  */
 class LikedMusicSyncTest {
 
@@ -92,7 +94,7 @@ class LikedMusicSyncTest {
         pages["t1"] = SongPage(songs = songs(3, 3), continuation = null)
         var calls = 0
 
-        YtMusicRepository.syncLikedMusic("t0") {
+        val complete = YtMusicRepository.syncLikedMusic("t0") {
             calls++
             pages[it]
         }
@@ -100,6 +102,7 @@ class LikedMusicSyncTest {
         // Two pages consumed, then the null continuation ended the loop — no
         // attempt to read a page the feed never promised.
         assertEquals(2, calls)
+        assertTrue(complete)
         assertEquals(setOf("v0", "v1", "v2", "v3", "v4", "v5"), LikeState.overrides.value.keys)
     }
 
@@ -107,8 +110,9 @@ class LikedMusicSyncTest {
     fun `liked sync is a no-op with no continuation`() = runBlocking {
         LikeState.clear()
         var calls = 0
-        YtMusicRepository.syncLikedMusic(null) { calls++; error("never called") }
+        val complete = YtMusicRepository.syncLikedMusic(null) { calls++; error("never called") }
         assertEquals(0, calls)
+        assertTrue(complete)
         assertTrue(LikeState.overrides.value.isEmpty())
     }
 
@@ -150,18 +154,39 @@ class LikedMusicSyncTest {
     // ---- Failure & cancellation should not crash or stall --------------------
 
     @Test
-    fun `a failed continuation stops the sync without losing earlier ids`() = runBlocking {
+    fun `a failed continuation that recovers is retried and finishes the sync`() = runBlocking {
+        LikeState.clear()
+        val pages = LinkedHashMap<String, SongPage>()
+        pages["t0"] = SongPage(songs = songs(3, 0), continuation = "t1")
+        pages["t1"] = SongPage(songs = songs(3, 3), continuation = null)
+        var t1Attempts = 0
+
+        // A timeout on one page of a ~25-page chain used to abandon every
+        // liked track behind it. One hiccup should cost a backoff, not the
+        // rest of the collection.
+        val complete = YtMusicRepository.syncLikedMusic("t0", attempts = 3, backoffMs = 1) { token ->
+            if (token == "t1" && ++t1Attempts < 3) null else pages[token]
+        }
+
+        assertTrue(complete)
+        assertEquals(3, t1Attempts)
+        assertEquals(setOf("v0", "v1", "v2", "v3", "v4", "v5"), LikeState.overrides.value.keys)
+    }
+
+    @Test
+    fun `a continuation that stays failed ends the sync incomplete, keeping earlier ids`() = runBlocking {
         LikeState.clear()
         val pages = LinkedHashMap<String, SongPage>()
         pages["t0"] = SongPage(songs = songs(3, 0), continuation = "t1")
 
-        YtMusicRepository.syncLikedMusic("t0") {
-            // Once the continuation to t1 is refused, the loop ends quietly —
-            // like the default `moreSongs(it).getOrNull()` returning null on a
-            // failed request. IDs already seeded stay put.
-            if (it == "t1") null else pages[it]
+        // Even after the retries are spent the loop ends quietly — the walk
+        // reported what it learned is partial, and ids already seeded stay
+        // put. The caller must not replace a full record with this.
+        val complete = YtMusicRepository.syncLikedMusic("t0", attempts = 2, backoffMs = 1) {
+            pages[it]
         }
 
+        assertFalse(complete)
         assertEquals(setOf("v0", "v1", "v2"), LikeState.overrides.value.keys)
     }
 
@@ -231,6 +256,22 @@ class LikedMusicSyncTest {
         LikeState.set("abc123", LikeStatus.LIKE)
 
         LikeState.rememberStated("abc123", LikeStatus.INDIFFERENT)
+
+        assertEquals(LikeStatus.LIKE, LikeState.overrides.value["abc123"])
+    }
+
+    // ---- E. A failed rating write rolls back to unknown, not to a pinned no ----
+
+    @Test
+    fun `a rolled back verdict does not outlive a later seed`() {
+        LikeState.clear()
+        // The rollback a failed `rate` now performs: forget the guess rather
+        // than state INDIFFERENT. A stated no-override outranks every page
+        // that follows, so pinning it kept a track YouTube still holds as
+        // liked reading as unliked until the app restarts.
+        LikeState.remove("abc123")
+
+        LikeState.seedLiked(setOf("abc123"))
 
         assertEquals(LikeStatus.LIKE, LikeState.overrides.value["abc123"])
     }

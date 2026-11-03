@@ -31,6 +31,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -603,9 +604,24 @@ object YtMusicRepository {
      * liked track past that page reading as "not liked" — the very symptom
      * #219 reported.
      *
+     * A page that comes back empty is retried up to [attempts] times with
+     * [backoffMs] doubling between tries. A long collection is one chain of
+     * ~25 sequential reads, and a single timeout used to abandon every liked
+     * track past it — recurring whenever the Library fetch's six parallel
+     * feeds drew the unlucky request. A transient failure must not cost the
+     * whole walk.
+     *
+     * The return states whether the chain was read to its end: false when a
+     * page stayed failed (or a token repeated), so the caller knows what
+     * landed in [LikeState] is the collection so far and not the account's
+     * whole liked library.
+     *
      * [loadNext] is injectable so the pagination loop is unit-testable; the
-     * default reads through [moreSongs] and stops on a failed page rather
-     * than surfacing an error for a background sync. Cancellation is
+     * default reads through [moreSongs] and stops on a page that outlasts its
+     * retries rather than surfacing an error for a background sync. A caller
+     * distinguishing "stop, this is no longer ours" from "this page hiccuped"
+     * should throw a cancellation rather than return null, or the retries will
+     * spend themselves on a feed it has abandoned. Cancellation is otherwise
      * cooperative and the caller (a ViewModel scope in the app) decides when
      * this outlives its usefulness.
      *
@@ -616,16 +632,25 @@ object YtMusicRepository {
      */
     suspend fun syncLikedMusic(
         firstToken: String?,
+        attempts: Int = 4,
+        backoffMs: Long = 500,
         loadNext: suspend (String) -> SongPage? = { moreSongs(it).getOrNull() },
-    ) {
-        if (firstToken == null) return
+    ): Boolean {
+        var next = firstToken
         val seen = HashSet<String>()
-        var next: String? = firstToken
         while (next != null && seen.add(next)) {
-            val page = loadNext(next) ?: return
+            var page: SongPage? = null
+            var attempt = 0
+            while (page == null && attempt < attempts) {
+                if (attempt > 0) delay(backoffMs shl (attempt - 1))
+                page = loadNext(next)
+                attempt++
+            }
+            if (page == null) return false
             LikeState.seedLiked(page.songs.mapTo(HashSet()) { it.videoId })
             next = page.continuation
         }
+        return next == null
     }
 
     /**

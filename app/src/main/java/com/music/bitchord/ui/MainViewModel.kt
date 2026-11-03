@@ -14,6 +14,7 @@ import com.music.bitchord.auth.adjacentProfile
 import com.music.bitchord.data.AppUpdateChecker
 import com.music.bitchord.data.LocalMediaRepository
 import com.music.bitchord.data.LikeState
+import com.music.bitchord.data.LikedIdsStore
 import com.music.bitchord.data.YtMusicRepository
 import com.music.bitchord.data.TopPicks
 import com.music.bitchord.data.AppleArtistPhotos
@@ -708,6 +709,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 onSuccess = {
                     // Liked Music is now out of date either way.
                     libraryStale = true
+                    // The disk keeps the same verdict the session just won:
+                    // a heart filled here must still be filled at the next
+                    // cold start, before any walk has run.
+                    val key = listenerKey()
+                    if (status == LikeStatus.LIKE) {
+                        LikedIdsStore.add(key, videoId)
+                        likedSinceSync += videoId
+                        unlikedSinceSync -= videoId
+                    } else {
+                        LikedIdsStore.remove(key, videoId)
+                        unlikedSinceSync += videoId
+                        likedSinceSync -= videoId
+                    }
                     if (status != LikeStatus.LIKE) dropFromLikedLists(videoId)
                     // Clearing the heart means forgetting the song, not
                     // demoting it — see [forgetFromLibrary].
@@ -716,7 +730,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (unliked) forgetFromLibrary(videoId)
                 },
                 onFailure = {
-                    LikeState.set(videoId, previous)
+                    // Roll back to "unknown" rather than pinning a verdict:
+                    // both [LikeState.seedLiked] and [LikeState.rememberStated]
+                    // defer to any override already set, so writing an
+                    // INDIFFERENT here kept a track YouTube still holds as
+                    // liked reading as unliked until the app restarts.
+                    if (previous == LikeStatus.INDIFFERENT) LikeState.remove(videoId)
+                    else LikeState.set(videoId, previous)
                 },
             )
         }
@@ -887,6 +907,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** In-flight liked-library continuation sync — see [syncLikedMusic]. */
     private var likedSyncJob: Job? = null
+
+    /**
+     * Confirmed taps since the last walk that read Liked Music to its end,
+     * kept for [LikedIdsStore.recordFetch]: a tap landed after its page was
+     * read is not in what that page said, and a complete walk must not
+     * overwrite it with yesterday's answer.
+     */
+    private val likedSinceSync = HashSet<String>()
+    private val unlikedSinceSync = HashSet<String>()
 
     /**
      * Loads the account state behind an opening track menu — the library
@@ -1924,6 +1953,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun loadLibrary() {
         if (!_signedIn.value) return
         val identity = listenerKey()
+        // Paint what the last confirmed walk learned before asking the
+        // network to learn it again: from a cold start this is the only
+        // thing that makes a heart true for a track past page one.
+        LikeState.seedLiked(LikedIdsStore.likedIds(identity))
         _library.value = UiState.Loading
         viewModelScope.launch { fetchLibrary(identity) }
     }
@@ -1934,8 +1967,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 // Liked Music is published with just its first page on the tab;
                 // the rest of the collection is synced into LikeState here, in
                 // this ViewModel's scope, so it is cancelled with the screen and
-                // a liked track past the first page still reads as liked.
-                page.likedContinuation?.let { token -> syncLikedMusic(identity, token) }
+                // a liked track past the first page still reads as liked. What
+                // the walk learns is also recorded in [LikedIdsStore] — a
+                // one-page collection needs no walk but records just the same.
+                if (!page.isEmpty) {
+                    val firstPageIds = page.likedSongs.mapTo(LinkedHashSet()) { it.videoId }
+                    val token = page.likedContinuation
+                    if (token != null) syncLikedMusic(identity, firstPageIds, token)
+                    else recordLikedFetch(identity, firstPageIds, complete = true)
+                }
                 if (page.isEmpty) UiState.Error(text(R.string.library_empty))
                 else UiState.Success(page.copy(likedContinuation = null))
             },
@@ -1946,7 +1986,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * Follows Liked Music's continuation chain to exhaustion, seeding each
-     * page's ids into [LikeState] so every liked track reads as liked.
+     * page's ids into [LikeState] so every liked track reads as liked, and
+     * recording the result for the next cold start.
      *
      * Scoped to [viewModelScope] — a re-fetch of the library cancels and
      * replaces it, and it dies with the screen. It only ever seeds ids, never
@@ -1955,14 +1996,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * [identity] is the listener this token belongs to, checked before every
      * page: [LikeState] is a single shared map, not scoped per account, so a
      * sync still in flight when the listener switches must stop rather than
-     * go on seeding the old account's likes into the new one's session.
+     * go on seeding the old account's likes into the new one's session. It
+     * stops by cancellation rather than by a null page, which the retries in
+     * [YtMusicRepository.syncLikedMusic] would read as a network hiccup and
+     * spend themselves retrying a feed that is no longer this sync's.
      */
-    private fun syncLikedMusic(identity: String?, token: String) {
+    private fun syncLikedMusic(identity: String?, firstPageIds: Set<String>, token: String) {
         likedSyncJob?.cancel()
         likedSyncJob = viewModelScope.launch {
-            YtMusicRepository.syncLikedMusic(token) { next ->
-                if (identity != listenerKey()) null else YtMusicRepository.moreSongs(next).getOrNull()
+            val walked = LinkedHashSet(firstPageIds)
+            val complete = YtMusicRepository.syncLikedMusic(token) { next ->
+                if (identity != listenerKey()) throw CancellationException("listener switched mid-sync")
+                YtMusicRepository.moreSongs(next).getOrNull()?.also { page ->
+                    walked += page.songs.map { it.videoId }
+                }
             }
+            recordLikedFetch(identity, walked, complete)
+        }
+    }
+
+    /**
+     * Hands [LikedIdsStore] what one walk learned and, when that walk read
+     * the chain to its end, spends the taps held for it — they are now part
+     * of what it recorded, and start gathering again.
+     */
+    private fun recordLikedFetch(identity: String?, ids: Set<String>, complete: Boolean) {
+        LikedIdsStore.recordFetch(identity, ids, complete, likedSinceSync, unlikedSinceSync)
+        if (complete) {
+            likedSinceSync.clear()
+            unlikedSinceSync.clear()
         }
     }
 
@@ -3544,6 +3606,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _account.value = null
         likedSyncJob?.cancel()
         LikeState.clear()
+        likedSinceSync.clear()
+        unlikedSinceSync.clear()
         _playlistsLoading.value = false
         _playlists.value = emptyList()
         _playlistOwned.value = emptyMap()
@@ -3608,6 +3672,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // them would show the next signed-in user someone else's hearts.
         likedSyncJob?.cancel()
         LikeState.clear()
+        likedSinceSync.clear()
+        unlikedSinceSync.clear()
         _playlists.value = emptyList()
         _playlistOwned.value = emptyMap()
         ownershipInFlight.clear()

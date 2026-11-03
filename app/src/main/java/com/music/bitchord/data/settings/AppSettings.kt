@@ -887,6 +887,7 @@ object AppSettings {
             context,
             likedTitle = context.getString(com.music.bitchord.R.string.auto_liked),
         )
+        com.music.bitchord.data.LikedIdsStore.init(context)
         readAll()
         watchConnection(context)
     }

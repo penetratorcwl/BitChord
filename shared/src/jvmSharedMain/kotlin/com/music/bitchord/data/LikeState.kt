@@ -4,6 +4,7 @@ import com.music.bitchord.data.model.LikeStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 
 /**
  * Ratings changed during this app session, shared by the UI and playback service.
@@ -17,7 +18,17 @@ object LikeState {
     val overrides: StateFlow<Map<String, LikeStatus>> = _overrides.asStateFlow()
 
     fun set(videoId: String, status: LikeStatus) {
-        _overrides.value += (videoId to status)
+        _overrides.update { it + (videoId to status) }
+    }
+
+    /**
+     * Forgets what this session believes about [videoId] rather than stating
+     * it is unrated. A pinned `INDIFFERENT` outranks every later page and
+     * menu — both [rememberStated] and [seedLiked] defer to an override — so
+     * an uncertain verdict written here would stay wrong until the restart.
+     */
+    fun remove(videoId: String) {
+        _overrides.update { if (videoId in it) it - videoId else it }
     }
 
     /**
@@ -33,12 +44,25 @@ object LikeState {
         }
     }
 
-    /** Seeds only ratings not already changed explicitly during this session. */
+    /**
+     * Seeds only ratings not already changed explicitly during this session.
+     *
+     * The write goes through [update] rather than a read-modify-write of
+     * [overrides]: the liked collection lands a page at a time while taps,
+     * menus and the player's own seeding write beside it, and a plain
+     * "read, merge, compare, publish" publishes nothing at all when a
+     * concurrent writer won the race — dropping that page's ids silently.
+     */
     fun seedLiked(videoIds: Set<String>) {
         if (videoIds.isEmpty()) return
-        val next = _overrides.value.toMutableMap()
-        videoIds.forEach { next.putIfAbsent(it, LikeStatus.LIKE) }
-        if (next != _overrides.value) _overrides.value = next
+        _overrides.update { current ->
+            val next = current.toMutableMap()
+            var changed = false
+            for (videoId in videoIds) {
+                if (next.putIfAbsent(videoId, LikeStatus.LIKE) == null) changed = true
+            }
+            if (changed) next else current
+        }
     }
 
     fun clear() {
