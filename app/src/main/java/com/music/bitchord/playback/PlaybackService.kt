@@ -795,6 +795,9 @@ class PlaybackService : MediaLibraryService() {
     private var favoriteActionJob: Job? = null
     private var stationActionJob: Job? = null
     private var autoplayLoadJob: Job? = null
+
+    /** In-flight per-track like-status read — see [fetchLikedStatusFor]. */
+    private var likedStatusJob: Job? = null
     /** Rate limit for listener-requested retries; automatic upgrades do not touch it. */
     private val manualUpgradeThrottle = ManualUpgradeThrottle(MANUAL_UPGRADE_COOLDOWN_MS)
     /** The upcoming ids read-ahead was last asked to warm, so an unchanged queue isn't asked again. */
@@ -1800,6 +1803,10 @@ class PlaybackService : MediaLibraryService() {
             restoreBoundedQueueOrLast(exoPlayer)
         }
         if (restored) {
+            // A restored queue never passes through [onTrackBecameCurrent],
+            // and the widget heart drawn below reads [LikeState] — ask for
+            // the current track's own rating before it is painted.
+            fetchLikedStatusFor(exoPlayer.currentMediaItem)
             publishWidgetState()
         } else {
             MediaWidgetSnapshot.save(this, MediaWidgetSnapshot.EMPTY)
@@ -3615,6 +3622,37 @@ class PlaybackService : MediaLibraryService() {
      * @param alreadyAudible whether the track was already sounding when it
      *   became current, which is only true of a crossfade handoff.
      */
+    /**
+     * Reads what YouTube says about this one track's rating and states it
+     * authoritatively in [LikeState], over anything a library page or disk
+     * cache had seeded.
+     *
+     * The walks sync whole collections — cheaply, once, for every screen at
+     * a time — but a 2.5k library is ~25 sequential requests and any answer
+     * they carry is only as true as the last walk that survived to the end.
+     * This reads the track itself, every time one becomes current, so a heart
+     * is true now rather than when the next lucky walk lands. One request per
+     * track change; quality swaps never reach it, they exit
+     * [Player.Listener.onMediaItemTransition] before this is called.
+     *
+     * A tap's own write outranks this for a moment — [LikeState.applyStated]
+     * defers to recent ones — so the heart a user just filled is never
+     * knocked back off by an answer read before the write landed.
+     */
+    private fun fetchLikedStatusFor(mediaItem: MediaItem?) {
+        val song = mediaItem?.toSong() ?: return
+        // Device files and downloads are liked into the device's own list,
+        // and a signed-out player has no rating to read.
+        if (song.localUri != null || !SignedIn.state(this).value) return
+        likedStatusJob?.cancel()
+        val videoId = song.videoId
+        likedStatusJob = scope.launch {
+            val stated = YtMusicRepository.songMenu(videoId).getOrNull()?.likeStatus
+            LikeState.applyStated(videoId, stated)
+            likedStatusJob = null
+        }
+    }
+
     private fun onTrackBecameCurrent(
         mediaItem: MediaItem?,
         previousEnded: Boolean,
@@ -3628,6 +3666,9 @@ class PlaybackService : MediaLibraryService() {
         }
         currentAudioInputFormat = null
         NerdStats.onTrackTransition(mediaItem?.mediaId)
+        // The heart is filled by what YouTube says of this track now, not by
+        // whatever a past walk happened to keep.
+        fetchLikedStatusFor(mediaItem)
         // A rendition discarded and fetched again comes back under the same
         // URI, so a size measured for the last track isn't kept past it.
         measuredBitrateCache.clear()

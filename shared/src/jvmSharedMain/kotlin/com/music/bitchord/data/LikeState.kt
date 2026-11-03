@@ -1,6 +1,7 @@
 package com.music.bitchord.data
 
 import com.music.bitchord.data.model.LikeStatus
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,10 +15,22 @@ import kotlinx.coroutines.flow.update
  * the same result immediately.
  */
 object LikeState {
+    /**
+     * How long a tap's own write outranks an answer fetched from the network.
+     * A fetch reading the server while a rating write is still landing would
+     * otherwise return the pre-tap status and knock the heart the user just
+     * saw filled back off again.
+     */
+    private const val USER_TAP_WINDOW_MS = 5_000L
+
     private val _overrides = MutableStateFlow<Map<String, LikeStatus>>(emptyMap())
     val overrides: StateFlow<Map<String, LikeStatus>> = _overrides.asStateFlow()
 
+    /** When this session last stated a rating itself, per track. */
+    private val userWrittenAt = ConcurrentHashMap<String, Long>()
+
     fun set(videoId: String, status: LikeStatus) {
+        userWrittenAt[videoId] = System.currentTimeMillis()
         _overrides.update { it + (videoId to status) }
     }
 
@@ -45,6 +58,23 @@ object LikeState {
     }
 
     /**
+     * Writes the rating a track's own page states, over anything cached —
+     * unlike [rememberStated], an `INDIFFERENT` here is an answer, not an
+     * absence of one, and it un-bolds hearts a stale library page seeded.
+     * A row that states nothing (null) changes nothing: unknown is not no.
+     *
+     * This is the authority the walks and disk caches only approximate: it
+     * reads the track as YouTube answers for it right now, so a heart is
+     * true even when a sync lost its chain somewhere behind.
+     */
+    fun applyStated(videoId: String, stated: LikeStatus?) {
+        if (stated == null) return
+        val writtenAt = userWrittenAt[videoId]
+        if (writtenAt != null && System.currentTimeMillis() - writtenAt < USER_TAP_WINDOW_MS) return
+        _overrides.update { it + (videoId to stated) }
+    }
+
+    /**
      * Seeds only ratings not already changed explicitly during this session.
      *
      * The write goes through [update] rather than a read-modify-write of
@@ -67,5 +97,6 @@ object LikeState {
 
     fun clear() {
         _overrides.value = emptyMap()
+        userWrittenAt.clear()
     }
 }

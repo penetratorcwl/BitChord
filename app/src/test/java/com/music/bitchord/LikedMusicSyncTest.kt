@@ -275,4 +275,42 @@ class LikedMusicSyncTest {
 
         assertEquals(LikeStatus.LIKE, LikeState.overrides.value["abc123"])
     }
+
+    // ---- F. The per-track read is authoritative over the caches ------------
+
+    @Test
+    fun `a stated read of nothing leaves what the caches seeded alone`() {
+        LikeState.clear()
+        LikeState.seedLiked(setOf("abc123"))
+
+        // A row without a like button states null — an absence of an answer,
+        // never evidence of "not liked".
+        LikeState.applyStated("abc123", null)
+
+        assertEquals(LikeStatus.LIKE, LikeState.overrides.value["abc123"])
+    }
+
+    @Test
+    fun `a stated indifferent read clears a like the caches left behind`() {
+        LikeState.clear()
+        LikeState.seedLiked(setOf("abc123"))
+
+        // The track was un-liked elsewhere; the page seeded long ago still
+        // calls it liked. What the track's own row says now wins.
+        LikeState.applyStated("abc123", LikeStatus.INDIFFERENT)
+
+        assertEquals(LikeStatus.INDIFFERENT, LikeState.overrides.value["abc123"])
+    }
+
+    @Test
+    fun `a fresh tap outranks a fetched answer until it lands`() {
+        LikeState.clear()
+        // The user just filled the heart; a read issued around the tap can
+        // still carry the pre-tap status and must not knock it back off.
+        LikeState.set("abc123", LikeStatus.LIKE)
+
+        LikeState.applyStated("abc123", LikeStatus.INDIFFERENT)
+
+        assertEquals(LikeStatus.LIKE, LikeState.overrides.value["abc123"])
+    }
 }
