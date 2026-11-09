@@ -92,4 +92,27 @@ class SongCreditsParserTest {
 
         assertEquals("MPTC_x", (endpoint?.get("browseId") as? kotlinx.serialization.json.JsonPrimitive)?.content)
     }
+
+    @Test
+    fun parsesCreditsFromDismissableDialogSections() {
+        val page = Json.parseToJsonElement(
+            """
+            {
+              "title": "Song credits",
+              "sections": [
+                {"dismissableDialogContentSectionRenderer":{"title":{"runs":[{"text":"Performed by"}]},"subtitle":{"runs":[{"text":"Eminem"}]}}},
+                {"dismissableDialogContentSectionRenderer":{"title":{"runs":[{"text":"Written by"}]},"subtitle":{"runs":[{"text":"Jeff Bass"},{"text":"\n"},{"text":"Luis Resto"},{"text":"\n"},{"text":"Marshall Mathers"}]}}},
+                {"dismissableDialogContentSectionRenderer":{"title":{"runs":[{"text":"Produced by"}]},"subtitle":{"runs":[{"text":"Eminem"}]}}},
+                {"dismissableDialogContentSectionRenderer":{"title":{"runs":[{"text":"Music metadata provided by"}]},"subtitle":{"runs":[{"text":"Eminem Catalog PS"}]}}}
+              ]
+            }
+            """.trimIndent()
+        )
+
+        val credits = SongInfoRepository.parseCreditsPage(page)
+
+        assertEquals(listOf("Performed by", "Written by", "Produced by", "Music metadata provided by"), credits.map { it.role })
+        assertEquals(listOf("Jeff Bass", "Luis Resto", "Marshall Mathers"), credits[1].names)
+        assertEquals(listOf("Eminem Catalog PS"), credits[3].names)
+    }
 }

@@ -106,6 +106,9 @@ object SongInfoRepository {
     }
 
     private suspend fun fetchCredits(videoId: String): List<SongCredit> {
+        // Direct credits browse: reliable for catalog tracks on YouTube Music.
+        val direct = runCatching { parseCreditsPage(Innertube.browse("MPTC$videoId")) }.getOrDefault(emptyList())
+        if (direct.isNotEmpty()) return direct
         val next = Innertube.next(videoId)
         val endpoint = findCreditsEndpoint(next, videoId) ?: return emptyList()
         val browseId = (endpoint["browseId"] as? JsonPrimitive)?.contentOrNull ?: return emptyList()
@@ -154,6 +157,13 @@ object SongInfoRepository {
 
     internal fun parseCreditsPage(root: JsonElement): List<SongCredit> {
         val credits = mutableListOf<SongCredit>()
+        // dismissableDialogContentSectionRenderer: the song credits browse page (MPTC*)
+        for (section in objectsNamed(root, "dismissableDialogContentSectionRenderer")) {
+            val role = section["title"]?.runsText()?.trim().orEmpty()
+            val names = splitNames(listOf(section["subtitle"]?.runsText().orEmpty()))
+            if (role.isNotBlank() && names.isNotEmpty()) credits += SongCredit(role, names)
+        }
+        if (credits.isNotEmpty()) return credits.distinctBy { it.role.lowercase() to it.text.lowercase() }
         // musicResponsiveListItemRenderer rows: flex column 0 = role, 1+ = names
         for (item in objectsNamed(root, "musicResponsiveListItemRenderer")) {
             val flex = ((item["flexColumns"] as? JsonArray) ?: JsonArray(emptyList())).toList()
@@ -195,12 +205,12 @@ object SongInfoRepository {
     }
 
     private fun splitNames(strings: List<String>): List<String> {
-        val joined = strings.joinToString("").replace('\n', ' ').trim()
+        val joined = strings.joinToString("")
         if (joined.isBlank()) return emptyList()
-        return joined.split(Regex("\\s*[•·]\\s*|\\s*,\\s*(?=[A-Z])"))
-            .map { it.trim() }
+        return joined.split(Regex("\\r?\\n+|\\s*[•·]\\s*|\\s*,\\s+(?=[\\p{Lu}\"'])"))
+            .map { it.trim().trimEnd(',', '•', '·') }
             .filter { it.isNotBlank() }
-            .ifEmpty { listOf(joined) }
+            .ifEmpty { listOf(joined.trim()) }
     }
 
     private fun objectsNamed(root: JsonElement, name: String): Sequence<JsonObject> = sequence {
