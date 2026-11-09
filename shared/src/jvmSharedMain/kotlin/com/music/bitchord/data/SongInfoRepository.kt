@@ -96,8 +96,12 @@ object SongInfoRepository {
                     ?.firstOrNull { it.matches(Regex("(?:19|20)[0-9]{2}")) }
             }
         }
-        (statistics.await().getOrNull() ?: SongInfo(failed = true)).copy(
-            album = album, releaseYear = year, credits = credits.await(),
+        val stat = statistics.await().getOrNull()
+        val ytmCredits = credits.await()
+        (stat ?: SongInfo(failed = true)).copy(
+            album = album,
+            releaseYear = year,
+            credits = ytmCredits.ifEmpty { stat?.credits.orEmpty() },
         ).let { it.copy(failed = it.failed || release.isFailure) }
     }
 
@@ -116,42 +120,36 @@ object SongInfoRepository {
      * navigation whose text suggests credits.
      */
     internal fun findCreditsEndpoint(root: JsonElement, videoId: String): JsonObject? {
+        fun JsonObject.pageType(): String =
+            this["browseEndpointContextSupportedConfigs"]
+                ?.let { it as? JsonObject }?.get("browseEndpointContextMusicConfig")
+                ?.let { it as? JsonObject }?.get("pageType")
+                ?.let { it as? JsonPrimitive }?.contentOrNull.orEmpty()
+
+        fun isCreditsBrowse(browse: JsonObject): Boolean {
+            val id = (browse["browseId"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            return "CREDIT" in browse.pageType() || id.startsWith("MPTC")
+        }
+
         val rows = objectsNamed(root, "playlistPanelVideoRenderer")
             .filter { (it["videoId"] as? JsonPrimitive)?.contentOrNull == videoId }
             .toList()
             .ifEmpty { objectsNamed(root, "playlistPanelVideoRenderer").toList() }
-        val menuScopes = (rows + listOf(root as? JsonObject).filterNotNull())
+        val menuScopes = (rows + listOfNotNull(root as? JsonObject))
         for (scope in menuScopes) {
-            val menus = objectsNamed(scope, "menuRenderer")
-            for (menu in menus) {
-                val items = ((menu["items"] as? JsonArray) ?: JsonArray(emptyList())).mapNotNull { it as? JsonObject }
-                val endpoint = items.firstNotNullOfOrNull { item ->
-                    val nav = item["menuNavigationItemRenderer"] as? JsonObject ?: return@firstNotNullOfOrNull null
-                    val ep = nav["navigationEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
-                    val browse = ep["browseEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
-                    val pageType = browse["browseEndpointContextSupportedConfigs"]
-                        ?.let { it as? JsonObject }?.get("browseEndpointContextMusicConfig")
-                        ?.let { it as? JsonObject }?.get("pageType")
-                        ?.let { it as? JsonPrimitive }?.contentOrNull.orEmpty()
-                    if ("CREDIT" in pageType) browse else null
-                } ?: items.firstNotNullOfOrNull { item ->
-                    val nav = item["menuNavigationItemRenderer"] as? JsonObject ?: return@firstNotNullOfOrNull null
-                    val text = nav.runsText()
-                    val ep = nav["navigationEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
-                    val browse = ep["browseEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
-                    if (text.contains("credit", ignoreCase = true)) browse else null
-                }
-                if (endpoint != null) return endpoint
+            val items = objectsNamed(scope, "menuNavigationItemRenderer").toList()
+            val endpoint = items.firstNotNullOfOrNull { nav ->
+                val browse = (nav["navigationEndpoint"] as? JsonObject)?.get("browseEndpoint") as? JsonObject
+                    ?: return@firstNotNullOfOrNull null
+                if (isCreditsBrowse(browse)) browse else null
+            } ?: items.firstNotNullOfOrNull { nav ->
+                val browse = (nav["navigationEndpoint"] as? JsonObject)?.get("browseEndpoint") as? JsonObject
+                    ?: return@firstNotNullOfOrNull null
+                if (nav.runsText().contains("credit", ignoreCase = true)) browse else null
             }
+            if (endpoint != null) return endpoint
         }
-        // Last resort: any browse endpoint anywhere in the response marked as credits.
-        return objectsNamed(root, "browseEndpoint").firstOrNull { browse ->
-            val pageType = browse["browseEndpointContextSupportedConfigs"]
-                ?.let { it as? JsonObject }?.get("browseEndpointContextMusicConfig")
-                ?.let { it as? JsonObject }?.get("pageType")
-                ?.let { it as? JsonPrimitive }?.contentOrNull.orEmpty()
-            "CREDIT" in pageType
-        }
+        return objectsNamed(root, "browseEndpoint").firstOrNull(::isCreditsBrowse)
     }
 
     internal fun parseCreditsPage(root: JsonElement): List<SongCredit> {
@@ -255,8 +253,44 @@ internal object SongInfoParser {
             views = details.str("viewCount")?.takeIf { it.toLongOrNull()?.let { n -> n >= 0 } == true },
             likes = (newLike ?: oldLike)?.withCount(),
             comments = comments,
+            credits = parseMusicSectionCredits(data),
             failed = data == null,
         )
+    }
+
+    private fun parseMusicSectionCredits(data: JsonObject?): List<SongCredit> {
+        if (data == null) return emptyList()
+        val sections = data.find("videoDescriptionMusicSectionRenderer")
+        if (sections.isEmpty()) return emptyList()
+        val credits = mutableListOf<SongCredit>()
+        for (section in sections) {
+            val rows = section.find("infoRowRenderer") + section.find("metadataRowRenderer") + section.find("premiumMetadataRowRenderer")
+            for (row in rows) {
+                val role = row["title"]?.text() ?: continue
+                val values = listOfNotNull(
+                    row["defaultMetadata"]?.text(),
+                    row["expandedMetadata"]?.text(),
+                    row["contents"]?.text(),
+                    row["content"]?.text(),
+                ).joinToString("").replace('\n', ' ').trim()
+                val names = values.split(Regex("\\s*[•·]\\s*|\\s*,\\s*(?=[A-Z])"))
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .ifEmpty { listOf(values).filter { it.isNotBlank() } }
+                if (role.isNotBlank() && names.isNotEmpty()) credits += SongCredit(role, names)
+            }
+            if (credits.isEmpty()) {
+                for (lockup in section.find("carouselLockupRenderer")) {
+                    for (row in lockup.find("infoRowRenderer")) {
+                        val role = row["title"]?.text() ?: continue
+                        val values = listOfNotNull(row["defaultMetadata"]?.text(), row["expandedMetadata"]?.text())
+                            .joinToString("").trim()
+                        if (role.isNotBlank() && values.isNotBlank()) credits += SongCredit(role, listOf(values))
+                    }
+                }
+            }
+        }
+        return credits.distinctBy { it.role.lowercase() to it.text.lowercase() }
     }
 
     /** Catalogue uploads explicitly state this in their description. Upload/publish dates
