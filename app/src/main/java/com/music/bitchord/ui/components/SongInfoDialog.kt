@@ -29,7 +29,8 @@ import com.music.bitchord.data.model.Song
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 
-private val INFO_BODY_HEIGHT = 332.dp
+// Fits the 5 standard rows (album → comments), matching the pre-credits popup size.
+private val INFO_BODY_HEIGHT = 320.dp
 
 /**
  * Drawn as the same UIAlertController-style card as [AlertScaffold] — centred
