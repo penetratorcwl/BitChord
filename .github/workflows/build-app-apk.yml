@@ -28,8 +28,11 @@ jobs:
       - name: Install Android SDK components
         run: |
           SDKMANAGER="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-37" "build-tools;37.0.0"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1"
+          for pkg in "platforms;android-37" "platforms;android-36" "build-tools;37.0.0" "build-tools;36.0.0"; do
+            "$SDKMANAGER" --install "$pkg" >/dev/null 2>&1 || true
+          done
 
       - name: Write local.properties
         run: |
