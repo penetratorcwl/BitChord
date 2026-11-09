@@ -13,10 +13,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -29,9 +31,7 @@ import com.music.bitchord.data.model.Song
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 
-// Fits the 5 standard rows (album → comments): same compact size as before, no empty space
-// and no jump when credits load below (scroll to see credits).
-private val INFO_BODY_HEIGHT = 328.dp
+// Body height adapts to the 5 standard rows (measured), so it fits any phone/font like before.
 
 /**
  * Drawn as the same UIAlertController-style card as [AlertScaffold] — centred
@@ -96,61 +96,54 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
 
             AlertRule()
             val surface = MaterialTheme.colorScheme.surface
-            Box(Modifier.height(INFO_BODY_HEIGHT).fillMaxWidth()) {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(creditsScroll)
-                        .drawWithContent {
-                            drawContent()
-                            if (creditsScroll.canScrollForward) {
-                                drawRect(
-                                    Brush.verticalGradient(
-                                        0f to Color.Transparent,
-                                        1f to surface,
-                                        startY = size.height - 28.dp.toPx(),
-                                        endY = size.height,
-                                    )
+            SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
+                val rowsHeight = subcompose("rows") { SongInfoStandardRows(info, song) }
+                    .first().measure(constraints).height
+                val body = subcompose("content") {
+                    Box(Modifier.fillMaxWidth().height(rowsHeight.toDp())) {
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .verticalScroll(creditsScroll)
+                                .drawWithContent {
+                                    drawContent()
+                                    if (creditsScroll.canScrollForward) {
+                                        drawRect(
+                                            Brush.verticalGradient(
+                                                0f to Color.Transparent,
+                                                1f to surface,
+                                                startY = size.height - 28.dp.toPx(),
+                                                endY = size.height,
+                                            )
+                                        )
+                                    }
+                                },
+                        ) {
+                            SongInfoStandardRows(info, song)
+                            info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
+                                AlertRule(Modifier.padding(start = 16.dp))
+                                SongInfoCreditRow(role = credit.role, names = credit.text)
+                            }
+                            if (info?.failed == true) {
+                                Text(
+                                    text = stringResource(R.string.song_info_error),
+                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
+                                    color = MaterialTheme.colorScheme.error,
                                 )
                             }
-                        },
-                ) {
-                    val unavailable = stringResource(R.string.song_info_unavailable)
-                    val rows = listOf(
-                        R.string.song_info_album to (info?.album ?: song.albumName),
-                        R.string.song_info_release_date to (info?.releaseDate ?: info?.releaseYear),
-                        R.string.song_info_views to info?.views?.let(::compactCount),
-                        R.string.song_info_likes to info?.likes,
-                        R.string.song_info_comments to info?.comments,
-                    )
-                    rows.forEachIndexed { index, (label, value) ->
-                        if (index > 0) AlertRule(Modifier.padding(start = 16.dp))
-                        SongInfoRow(
-                            label = stringResource(label),
-                            value = value ?: unavailable.takeIf { info != null },
-                        )
+                        }
+                        if (creditsScroll.canScrollForward) {
+                            Icon(
+                                imageVector = Icons.Rounded.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = onSurface.copy(alpha = 0.35f),
+                                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(16.dp),
+                            )
+                        }
                     }
-                    info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
-                        AlertRule(Modifier.padding(start = 16.dp))
-                        SongInfoCreditRow(role = credit.role, names = credit.text)
-                    }
-                    if (info?.failed == true) {
-                        Text(
-                            text = stringResource(R.string.song_info_error),
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
-                if (creditsScroll.canScrollForward) {
-                    Icon(
-                        imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = null,
-                        tint = onSurface.copy(alpha = 0.35f),
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(16.dp),
-                    )
-                }
+                }.first().measure(Constraints.fixed(constraints.maxWidth, rowsHeight))
+                layout(constraints.maxWidth, rowsHeight) { body.place(0, 0) }
             }
 
             AlertRule()
@@ -159,6 +152,27 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
                 AlertRule()
             }
             AlertAction(label = stringResource(R.string.done), emphasised = true, onClick = onDismiss)
+        }
+    }
+}
+
+@Composable
+private fun SongInfoStandardRows(info: SongInfo?, song: Song) {
+    val unavailable = stringResource(R.string.song_info_unavailable)
+    val rows = listOf(
+        R.string.song_info_album to (info?.album ?: song.albumName),
+        R.string.song_info_release_date to (info?.releaseDate ?: info?.releaseYear),
+        R.string.song_info_views to info?.views?.let(::compactCount),
+        R.string.song_info_likes to info?.likes,
+        R.string.song_info_comments to info?.comments,
+    )
+    Column {
+        rows.forEachIndexed { index, (label, value) ->
+            if (index > 0) AlertRule(Modifier.padding(start = 16.dp))
+            SongInfoRow(
+                label = stringResource(label),
+                value = value ?: unavailable.takeIf { info != null },
+            )
         }
     }
 }
