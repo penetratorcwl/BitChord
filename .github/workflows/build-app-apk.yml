@@ -23,10 +23,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK components
+        run: |
+          SDKMANAGER="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "ndk;27.0.12077973" "cmake;3.22.1" "platforms;android-37" "build-tools;37.0.0"
 
       - name: Write local.properties
         run: |
