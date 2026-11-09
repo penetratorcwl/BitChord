@@ -10,6 +10,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -24,7 +27,7 @@ import com.music.bitchord.data.SongInfoRepository
 import com.music.bitchord.data.compactCount
 import com.music.bitchord.data.model.Song
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 
 private val INFO_BODY_MAX_HEIGHT = 360.dp
 
@@ -46,6 +49,7 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
         value = null
         value = SongInfoRepository.load(song)
     }
+    val creditsScroll = rememberScrollState()
     val onSurface = MaterialTheme.colorScheme.onSurface
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -89,11 +93,7 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
             }
 
             AlertRule()
-            Column(
-                Modifier
-                    .heightIn(max = INFO_BODY_MAX_HEIGHT)
-                    .verticalScroll(rememberScrollState()),
-            ) {
+            Column(Modifier.height(INFO_BODY_MAX_HEIGHT)) {
                 val unavailable = stringResource(R.string.song_info_unavailable)
                 val rows = listOf(
                     R.string.song_info_album to (info?.album ?: song.albumName),
@@ -109,17 +109,47 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
                         value = value ?: unavailable.takeIf { info != null },
                     )
                 }
-                info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
-                    AlertRule(Modifier.padding(start = 16.dp))
-                    SongInfoCreditRow(role = credit.role, names = credit.text)
-                }
-                if (info?.failed == true) {
-                    Text(
-                        text = stringResource(R.string.song_info_error),
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
-                        color = MaterialTheme.colorScheme.error,
-                    )
+                val surface = MaterialTheme.colorScheme.surface
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(creditsScroll)
+                            .drawWithContent {
+                                drawContent()
+                                if (creditsScroll.canScrollForward) {
+                                    drawRect(
+                                        Brush.verticalGradient(
+                                            0f to Color.Transparent,
+                                            1f to surface,
+                                            startY = size.height - 28.dp.toPx(),
+                                            endY = size.height,
+                                        )
+                                    )
+                                }
+                            },
+                    ) {
+                        info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
+                            AlertRule(Modifier.padding(start = 16.dp))
+                            SongInfoCreditRow(role = credit.role, names = credit.text)
+                        }
+                        if (info?.failed == true) {
+                            Text(
+                                text = stringResource(R.string.song_info_error),
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    if (creditsScroll.canScrollForward) {
+                        Icon(
+                            imageVector = Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = onSurface.copy(alpha = 0.35f),
+                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(16.dp),
+                        )
+                    }
                 }
             }
 
