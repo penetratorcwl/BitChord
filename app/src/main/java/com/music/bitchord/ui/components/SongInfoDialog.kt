@@ -29,7 +29,7 @@ import com.music.bitchord.data.model.Song
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 
-private val INFO_BODY_MAX_HEIGHT = 360.dp
+private val INFO_BODY_HEIGHT = 332.dp
 
 /**
  * Drawn as the same UIAlertController-style card as [AlertScaffold] — centred
@@ -93,63 +93,61 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
             }
 
             AlertRule()
-            Column(Modifier.height(INFO_BODY_MAX_HEIGHT)) {
-                val unavailable = stringResource(R.string.song_info_unavailable)
-                val rows = listOf(
-                    R.string.song_info_album to (info?.album ?: song.albumName),
-                    R.string.song_info_release_date to (info?.releaseDate ?: info?.releaseYear),
-                    R.string.song_info_views to info?.views?.let(::compactCount),
-                    R.string.song_info_likes to info?.likes,
-                    R.string.song_info_comments to info?.comments,
-                )
-                rows.forEachIndexed { index, (label, value) ->
-                    if (index > 0) AlertRule(Modifier.padding(start = 16.dp))
-                    SongInfoRow(
-                        label = stringResource(label),
-                        value = value ?: unavailable.takeIf { info != null },
-                    )
-                }
-                val surface = MaterialTheme.colorScheme.surface
-                Box(Modifier.weight(1f).fillMaxWidth()) {
-                    Column(
-                        Modifier
-                            .fillMaxSize()
-                            .verticalScroll(creditsScroll)
-                            .drawWithContent {
-                                drawContent()
-                                if (creditsScroll.canScrollForward) {
-                                    drawRect(
-                                        Brush.verticalGradient(
-                                            0f to Color.Transparent,
-                                            1f to surface,
-                                            startY = size.height - 28.dp.toPx(),
-                                            endY = size.height,
-                                        )
+            val surface = MaterialTheme.colorScheme.surface
+            Box(Modifier.height(INFO_BODY_HEIGHT).fillMaxWidth()) {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(creditsScroll)
+                        .drawWithContent {
+                            drawContent()
+                            if (creditsScroll.canScrollForward) {
+                                drawRect(
+                                    Brush.verticalGradient(
+                                        0f to Color.Transparent,
+                                        1f to surface,
+                                        startY = size.height - 28.dp.toPx(),
+                                        endY = size.height,
                                     )
-                                }
-                            },
-                    ) {
-                        info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
-                            AlertRule(Modifier.padding(start = 16.dp))
-                            SongInfoCreditRow(role = credit.role, names = credit.text)
-                        }
-                        if (info?.failed == true) {
-                            Text(
-                                text = stringResource(R.string.song_info_error),
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                    }
-                    if (creditsScroll.canScrollForward) {
-                        Icon(
-                            imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = onSurface.copy(alpha = 0.35f),
-                            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(16.dp),
+                                )
+                            }
+                        },
+                ) {
+                    val unavailable = stringResource(R.string.song_info_unavailable)
+                    val rows = listOf(
+                        R.string.song_info_album to (info?.album ?: song.albumName),
+                        R.string.song_info_release_date to (info?.releaseDate ?: info?.releaseYear),
+                        R.string.song_info_views to info?.views?.let(::compactCount),
+                        R.string.song_info_likes to info?.likes,
+                        R.string.song_info_comments to info?.comments,
+                    )
+                    rows.forEachIndexed { index, (label, value) ->
+                        if (index > 0) AlertRule(Modifier.padding(start = 16.dp))
+                        SongInfoRow(
+                            label = stringResource(label),
+                            value = value ?: unavailable.takeIf { info != null },
                         )
                     }
+                    info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
+                        AlertRule(Modifier.padding(start = 16.dp))
+                        SongInfoCreditRow(role = credit.role, names = credit.text)
+                    }
+                    if (info?.failed == true) {
+                        Text(
+                            text = stringResource(R.string.song_info_error),
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 15.sp),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                if (creditsScroll.canScrollForward) {
+                    Icon(
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = onSurface.copy(alpha = 0.35f),
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(16.dp),
+                    )
                 }
             }
 
