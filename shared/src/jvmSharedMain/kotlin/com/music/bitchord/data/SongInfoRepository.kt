@@ -18,6 +18,10 @@ import kotlinx.serialization.json.*
 import org.jsoup.Jsoup
 import java.time.LocalDate
 
+data class SongCredit(val role: String, val names: List<String>) {
+    val text: String get() = names.joinToString(", ")
+}
+
 data class SongInfo(
     val album: String? = null,
     val releaseYear: String? = null,
@@ -25,6 +29,7 @@ data class SongInfo(
     val views: String? = null,
     val likes: String? = null,
     val comments: String? = null,
+    val credits: List<SongCredit> = emptyList(),
     val failed: Boolean = false,
 )
 
@@ -76,6 +81,7 @@ object SongInfoRepository {
                 SongInfoParser.parse(response.bodyAsText(), song.videoId)
             }
         }
+        val credits = async { attempt { fetchCredits(song.videoId) }.getOrDefault(emptyList()) }
         var album = song.albumName
         var year: String? = null
         val release = attempt {
@@ -91,8 +97,123 @@ object SongInfoRepository {
             }
         }
         (statistics.await().getOrNull() ?: SongInfo(failed = true)).copy(
-            album = album, releaseYear = year,
+            album = album, releaseYear = year, credits = credits.await(),
         ).let { it.copy(failed = it.failed || release.isFailure) }
+    }
+
+    private suspend fun fetchCredits(videoId: String): List<SongCredit> {
+        val next = Innertube.next(videoId)
+        val endpoint = findCreditsEndpoint(next, videoId) ?: return emptyList()
+        val browseId = (endpoint["browseId"] as? JsonPrimitive)?.contentOrNull ?: return emptyList()
+        val params = (endpoint["params"] as? JsonPrimitive)?.contentOrNull
+        val page = Innertube.browse(browseId, params)
+        return parseCreditsPage(page)
+    }
+
+    /**
+     * Finds the credits browse endpoint in a `next` response. Prefers an endpoint
+     * whose page type marks it as track credits, falling back to any menu
+     * navigation whose text suggests credits.
+     */
+    internal fun findCreditsEndpoint(root: JsonElement, videoId: String): JsonObject? {
+        val rows = objectsNamed(root, "playlistPanelVideoRenderer")
+            .filter { (it["videoId"] as? JsonPrimitive)?.contentOrNull == videoId }
+            .toList()
+            .ifEmpty { objectsNamed(root, "playlistPanelVideoRenderer").toList() }
+        val menuScopes = (rows + listOf(root as? JsonObject).filterNotNull())
+        for (scope in menuScopes) {
+            val menus = objectsNamed(scope, "menuRenderer")
+            for (menu in menus) {
+                val items = ((menu["items"] as? JsonArray) ?: JsonArray(emptyList())).mapNotNull { it as? JsonObject }
+                val endpoint = items.firstNotNullOfOrNull { item ->
+                    val nav = item["menuNavigationItemRenderer"] as? JsonObject ?: return@firstNotNullOfOrNull null
+                    val ep = nav["navigationEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
+                    val browse = ep["browseEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
+                    val pageType = browse["browseEndpointContextSupportedConfigs"]
+                        ?.let { it as? JsonObject }?.get("browseEndpointContextMusicConfig")
+                        ?.let { it as? JsonObject }?.get("pageType")
+                        ?.let { it as? JsonPrimitive }?.contentOrNull.orEmpty()
+                    if ("CREDIT" in pageType) browse else null
+                } ?: items.firstNotNullOfOrNull { item ->
+                    val nav = item["menuNavigationItemRenderer"] as? JsonObject ?: return@firstNotNullOfOrNull null
+                    val text = nav.runsText()
+                    val ep = nav["navigationEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
+                    val browse = ep["browseEndpoint"] as? JsonObject ?: return@firstNotNullOfOrNull null
+                    if (text.contains("credit", ignoreCase = true)) browse else null
+                }
+                if (endpoint != null) return endpoint
+            }
+        }
+        // Last resort: any browse endpoint anywhere in the response marked as credits.
+        return objectsNamed(root, "browseEndpoint").firstOrNull { browse ->
+            val pageType = browse["browseEndpointContextSupportedConfigs"]
+                ?.let { it as? JsonObject }?.get("browseEndpointContextMusicConfig")
+                ?.let { it as? JsonObject }?.get("pageType")
+                ?.let { it as? JsonPrimitive }?.contentOrNull.orEmpty()
+            "CREDIT" in pageType
+        }
+    }
+
+    internal fun parseCreditsPage(root: JsonElement): List<SongCredit> {
+        val credits = mutableListOf<SongCredit>()
+        // musicResponsiveListItemRenderer rows: flex column 0 = role, 1+ = names
+        for (item in objectsNamed(root, "musicResponsiveListItemRenderer")) {
+            val flex = ((item["flexColumns"] as? JsonArray) ?: JsonArray(emptyList())).toList()
+            val role = flex.getOrNull(0)?.rendererText()?.trim().orEmpty()
+            val names = if (flex.size > 1) {
+                flex.drop(1).flatMap { splitNames(listOf(it.rendererText())) }
+            } else {
+                splitNames(listOf(item["subtitle"]?.runsText().orEmpty()))
+            }
+            if (role.isNotBlank() && names.isNotEmpty()) credits += SongCredit(role, names)
+        }
+        if (credits.isNotEmpty()) return credits.distinctBy { it.role.lowercase() to it.text.lowercase() }
+        // Fallback: shelf-based layouts
+        for (shelf in objectsNamed(root, "musicShelfRenderer") + objectsNamed(root, "musicCarouselShelfRenderer")) {
+            val header = shelf["header"] as? JsonObject
+            val role = header?.runsText()?.trim().orEmpty()
+            val contents = ((shelf["contents"] as? JsonArray) ?: JsonArray(emptyList())).toList()
+            val names = contents.flatMap { c ->
+                splitNames(listOf((c as? JsonObject)?.runsText().orEmpty()))
+            }
+            if (role.isNotBlank() && names.isNotEmpty()) credits += SongCredit(role, names)
+        }
+        return credits.distinctBy { it.role.lowercase() to it.text.lowercase() }
+    }
+
+    private fun JsonElement.rendererText(): String =
+        objectsNamed(this, "text").firstNotNullOfOrNull { it.runsText().takeIf(String::isNotBlank) }
+            ?: runsText()
+
+    private fun JsonElement.runsText(): String = when (this) {
+        is JsonPrimitive -> contentOrNull.orEmpty()
+        is JsonArray -> joinToString("") { it.runsText() }
+        is JsonObject -> (this["simpleText"] as? JsonPrimitive)?.contentOrNull
+            ?: (this["runs"] as? JsonArray)?.joinToString("") { run ->
+                ((run as? JsonObject)?.get("text") as? JsonPrimitive)?.contentOrNull.orEmpty()
+            }
+            ?: this["text"]?.runsText()
+            ?: ""
+    }
+
+    private fun splitNames(strings: List<String>): List<String> {
+        val joined = strings.joinToString("").replace('\n', ' ').trim()
+        if (joined.isBlank()) return emptyList()
+        return joined.split(Regex("\\s*[•·]\\s*|\\s*,\\s*(?=[A-Z])"))
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .ifEmpty { listOf(joined) }
+    }
+
+    private fun objectsNamed(root: JsonElement, name: String): Sequence<JsonObject> = sequence {
+        when (root) {
+            is JsonObject -> for ((key, value) in root) {
+                if (key == name && value is JsonObject) yield(value)
+                yieldAll(objectsNamed(value, name))
+            }
+            is JsonArray -> for (value in root) yieldAll(objectsNamed(value, name))
+            else -> Unit
+        }
     }
 
     private suspend fun <T> attempt(block: suspend () -> T): Result<T> = try {

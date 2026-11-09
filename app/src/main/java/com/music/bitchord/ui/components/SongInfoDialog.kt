@@ -109,6 +109,10 @@ internal fun SongInfoDialog(song: Song, onDismiss: () -> Unit) {
                         value = value ?: unavailable.takeIf { info != null },
                     )
                 }
+                info?.credits?.takeIf { it.isNotEmpty() }?.forEach { credit ->
+                    AlertRule(Modifier.padding(start = 16.dp))
+                    SongInfoCreditRow(role = credit.role, names = credit.text)
+                }
                 if (info?.failed == true) {
                     Text(
                         text = stringResource(R.string.song_info_error),
@@ -162,5 +166,27 @@ private fun SongInfoRow(label: String, value: String?) {
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SongInfoCreditRow(role: String, names: String) {
+    val onSurface = MaterialTheme.colorScheme.onSurface
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+    ) {
+        Text(
+            text = role,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 17.sp),
+            color = onSurface.copy(alpha = 0.6f),
+        )
+        Text(
+            text = names,
+            modifier = Modifier.padding(top = 2.dp),
+            style = MaterialTheme.typography.bodyLarge.copy(fontSize = 15.sp),
+            color = onSurface,
+        )
     }
 }

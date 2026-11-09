@@ -1,0 +1,77 @@
+name: Build App APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: app-apk-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app-apk:
+    name: Android app (dev debug)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Write local.properties
+        run: |
+          echo "LASTFM_API_KEY=${{ secrets.LASTFM_API_KEY }}" > local.properties
+          echo "LASTFM_SECRET=${{ secrets.LASTFM_SECRET }}" >> local.properties
+          echo "LISTEN_TOGETHER_SERVER=${{ secrets.LISTEN_TOGETHER_SERVER }}" >> local.properties
+
+      # Use the local debug key when available so installs can replace a local dev build.
+      - name: Write the debug keystore
+        env:
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          [ -n "$DEBUG_KEYSTORE_BASE64" ] || exit 0
+          mkdir -p ~/.android
+          echo "$DEBUG_KEYSTORE_BASE64" | base64 -d > ~/.android/debug.keystore
+
+      - run: chmod +x gradlew
+
+      - name: Build the app dev APK
+        run: ./gradlew :app:assembleDevDebug -x lint -x test --stacktrace
+
+      - name: Upload the app dev APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitchord-app-dev-debug
+          path: app/build/outputs/apk/dev/debug/*.apk
+
+      - name: Publish APK to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="app-dev-debug-${{ github.run_number }}"
+          APK=$(ls app/build/outputs/apk/dev/debug/*.apk | head -n 1)
+          gh release create "$TAG" "$APK" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "App dev debug ${{ github.run_number }}" \
+            --notes "Dev debug APK built from ${{ github.sha }} (includes song info credits)." \
+            --prerelease
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-apk-build-reports
+          path: |
+            app/build/reports/
+            **/build/reports/
